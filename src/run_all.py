@@ -163,13 +163,36 @@ def setup_logging() -> Path:
     return log_path
 
 
-async def run_batch(jobs: list[dict]) -> int:
-    """Non-interactive: scrape every incomplete target once, isolating failures.
+QUOTA_FILE = OUT / ".quota.json"   # tracks targets processed per calendar day
 
-    Built for cron/systemd. Returns a process exit code: 0 if nothing failed,
-    1 if any target errored (so a timer/monitor can alert on it).
+
+def _daily_count() -> int:
+    """Targets already processed *today* (0 if the state file is old/absent)."""
+    try:
+        d = json.loads(QUOTA_FILE.read_text())
+        return int(d.get("count", 0)) if d.get("date") == date.today().isoformat() else 0
+    except Exception:
+        return 0
+
+
+def _bump_daily_count() -> int:
+    n = _daily_count() + 1
+    QUOTA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    QUOTA_FILE.write_text(json.dumps({"date": date.today().isoformat(), "count": n}))
+    return n
+
+
+async def run_batch(jobs: list[dict], limit: int | None = None,
+                    daily_limit: int | None = None) -> int:
+    """Non-interactive: scrape incomplete targets once, isolating failures.
+
+    Built for cron/systemd. `limit` caps targets processed this run; `daily_limit`
+    caps targets processed per calendar day across all runs (persisted in
+    data/corpus/.quota.json) so a timer firing N times still won't exceed it.
+    Returns exit code 0 if nothing failed, 1 if any target errored.
     """
     done = skipped = partial = failed = 0
+    this_run = 0
     total = len(jobs)
     for i, job in enumerate(jobs, 1):
         db, nd_path = job_paths(job)
@@ -177,7 +200,15 @@ async def run_batch(jobs: list[dict]) -> int:
         if is_complete(db, job["handle"], job["since"], job["until"]):
             skipped += 1
             continue
+        if limit is not None and this_run >= limit:
+            print(f"\n[limit] reached per-run cap of {limit} — stopping.")
+            break
+        if daily_limit is not None and _daily_count() >= daily_limit:
+            print(f"\n[quota] daily cap of {daily_limit} already reached today — stopping.")
+            break
         print(f"\n===== [{i}/{total}] {tag} =====")
+        this_run += 1
+        _bump_daily_count()   # count the attempt up-front (a crash still consumes a slot)
         try:
             n = await run_one(job)
         except KeyboardInterrupt:
@@ -201,8 +232,9 @@ async def run_batch(jobs: list[dict]) -> int:
         else:
             partial += 1
             print(f"  ~ {tag} made progress but isn't fully covered yet — will resume next run")
-    print(f"\nBatch summary: {done} newly complete, {partial} partial, "
-          f"{skipped} already complete, {failed} failed (of {total} targets).")
+    print(f"\nBatch summary: {this_run} processed this run — {done} newly complete, "
+          f"{partial} partial, {failed} failed; {skipped} already complete "
+          f"(of {total} targets, {_daily_count()} done today).")
     return 1 if failed else 0
 
 
@@ -211,6 +243,10 @@ async def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="just list the targets and exit")
     ap.add_argument("--all", action="store_true",
                     help="scrape every incomplete target non-interactively (for cron/systemd)")
+    ap.add_argument("--limit", type=int, default=None, metavar="N",
+                    help="with --all: scrape at most N targets this run")
+    ap.add_argument("--daily-limit", type=int, default=None, metavar="M",
+                    help="with --all: scrape at most M targets per calendar day (across runs)")
     args = ap.parse_args()
 
     jobs = build_jobs()
@@ -220,7 +256,7 @@ async def main() -> None:
 
     setup_logging()
     if args.all:
-        code = await run_batch(jobs)
+        code = await run_batch(jobs, limit=args.limit, daily_limit=args.daily_limit)
         sys.exit(code)
 
     print_menu(jobs)
