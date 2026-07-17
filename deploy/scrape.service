@@ -1,0 +1,12 @@
+[Unit]
+Description=Populism tweet scraper (throttled batch run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/populism-scraping
+ExecStart=/opt/populism-scraping/.venv/bin/python src/run_all.py --all --limit 3 --daily-limit 10
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=idle

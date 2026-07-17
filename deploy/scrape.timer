@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the populism scraper 4x/day, jittered
+
+[Timer]
+# 02:00, 09:00, 15:00, 21:00 local time (container TZ = Europe/Amsterdam),
+# each shifted by up to 2h so runs land at varied times of day.
+OnCalendar=*-*-* 02,09,15,21:00
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
