@@ -44,20 +44,21 @@ idempotent (`INSERT OR IGNORE`) and a per-handle checkpoint lets an interrupted 
 
 ## Setup
 
+After cloning, run the setup script — it creates the virtualenv, installs the
+dependencies, and drops a `secrets/accounts.json` template for you to fill in:
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+./setup.sh
 ```
+
+(If you prefer to do it by hand: `python3 -m venv .venv && source .venv/bin/activate
+&& pip install -r requirements.txt`.)
 
 ### Provide X accounts
 
 The scraper authenticates via browser cookies from real X accounts (redundancy +
-overnight throughput). Copy the template and fill in your own accounts:
-
-```bash
-cp secrets/accounts.example.json secrets/accounts.json
-```
+overnight throughput). `setup.sh` copies `secrets/accounts.example.json` to
+`secrets/accounts.json` for you — open it and fill in your own accounts.
 
 Each entry needs a `username` and a `cookies` string containing at least
 `auth_token` and `ct0` (grab these from your browser's X session cookies).
@@ -66,6 +67,7 @@ Each entry needs a `username` and a `cookies` string containing at least
 Then load and verify the pool:
 
 ```bash
+source .venv/bin/activate
 python src/load_accounts.py
 ```
 
