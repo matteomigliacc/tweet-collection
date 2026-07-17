@@ -43,9 +43,9 @@ def _load_config() -> dict | None:
         return None
 
 
-def send_email(subject: str, body: str) -> bool:
-    """Send one plaintext email. Returns True on success, False on any failure
-    (failures are logged, never raised)."""
+def send_email(subject: str, body: str, html: str | None = None) -> bool:
+    """Send one email (plaintext, plus an optional HTML alternative). Returns True on
+    success, False on any failure (failures are logged, never raised)."""
     cfg = _load_config()
     if cfg is None:
         return False
@@ -54,6 +54,8 @@ def send_email(subject: str, body: str) -> bool:
     msg["From"] = cfg["from_addr"]
     msg["To"] = cfg["to_addr"]
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
     try:
         if cfg.get("use_tls", True):
             with smtplib.SMTP(cfg["host"], int(cfg["port"]), timeout=30) as s:

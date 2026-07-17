@@ -29,6 +29,7 @@ import csv
 import json
 import sqlite3
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -182,6 +183,95 @@ def _bump_daily_count() -> int:
     return n
 
 
+def _fmt_dur(seconds: float) -> str:
+    s = int(round(seconds))
+    h, r = divmod(s, 3600)
+    m, sec = divmod(r, 60)
+    if h:
+        return f"{h}h {m:02d}m {sec:02d}s"
+    if m:
+        return f"{m}m {sec:02d}s"
+    return f"{sec}s"
+
+
+def build_session_email(records: list[dict], done: int, partial: int, failed: int,
+                        skipped: int, total: int, done_today: int,
+                        session_secs: float) -> tuple[str, str, str]:
+    """Compose (subject, plaintext, html) for one batch-run summary email.
+
+    `records`: one dict per account processed this run, with keys party, handle,
+    since, until, tweets (int|None), seconds, status ('complete'|'partial'|'failed')."""
+    total_tweets = sum(r["tweets"] for r in records if r.get("tweets"))
+    complete_overall = skipped + done
+    dur = _fmt_dur(session_secs)
+    subject = (f"[scraper] {done} new · {partial} partial · {failed} failed — "
+               f"{total_tweets:,} tweets in {dur}")
+
+    # ---- plaintext ----
+    lines = ["Populism scraper — session summary",
+             "=" * 40,
+             f"Duration:  {dur}",
+             f"Processed: {len(records)} account(s) this run",
+             f"Result:    {done} newly complete, {partial} partial, {failed} failed",
+             f"Tweets:    {total_tweets:,} collected this session",
+             f"Overall:   {complete_overall}/{total} targets complete ({done_today} done today)",
+             "",
+             f"{'Account':22}{'Party':16}{'Tweets':>8}{'Time':>9}  Status"]
+    for r in records:
+        tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "-"
+        lines.append(f"@{r['handle']:21}{r['party']:16}{tw:>8}{_fmt_dur(r['seconds']):>9}  {r['status']}")
+    text = "\n".join(lines)
+
+    # ---- html ----
+    badge = {"complete": ("#137333", "#e6f4ea"), "partial": ("#a56300", "#fef7e0"),
+             "failed": ("#c5221f", "#fce8e6")}
+    rows = ""
+    for r in records:
+        col, bg = badge.get(r["status"], ("#444", "#eee"))
+        tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "—"
+        td = "padding:9px 12px;border-bottom:1px solid #eee;"
+        rows += (
+            f"<tr>"
+            f"<td style='{td}font-family:ui-monospace,Menlo,monospace'>@{r['handle']}</td>"
+            f"<td style='{td}'>{r['party']}</td>"
+            f"<td style='{td}color:#888;font-size:12px'>{r['since']} → {r['until']}</td>"
+            f"<td style='{td}text-align:right;font-variant-numeric:tabular-nums'>{tw}</td>"
+            f"<td style='{td}text-align:right;color:#888'>{_fmt_dur(r['seconds'])}</td>"
+            f"<td style='{td}'><span style='background:{bg};color:{col};padding:2px 9px;"
+            f"border-radius:11px;font-size:12px;font-weight:600'>{r['status']}</span></td>"
+            f"</tr>")
+
+    def stat(label, value):
+        return (f"<td style='padding:14px 16px;text-align:center'>"
+                f"<div style='font-size:22px;font-weight:700;color:#111'>{value}</div>"
+                f"<div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em'>{label}</div></td>")
+
+    html = f"""\
+<div style="background:#f4f5f7;padding:24px 0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#222">
+  <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <div style="background:#1f2933;color:#fff;padding:18px 22px;font-size:16px;font-weight:600">
+      🐦 Populism scraper &middot; session summary
+    </div>
+    <table style="width:100%;border-collapse:collapse;border-bottom:1px solid #eee">
+      <tr>{stat('Tweets', f'{total_tweets:,}')}{stat('New datasets', done)}{stat('Duration', dur)}{stat('Complete', f'{complete_overall}/{total}')}</tr>
+    </table>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="text-align:left;color:#888;font-size:11px;text-transform:uppercase;letter-spacing:.04em">
+        <th style="padding:10px 12px">Account</th><th style="padding:10px 12px">Party</th>
+        <th style="padding:10px 12px">Window</th><th style="padding:10px 12px;text-align:right">Tweets</th>
+        <th style="padding:10px 12px;text-align:right">Time</th><th style="padding:10px 12px">Status</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <div style="padding:14px 22px;color:#999;font-size:12px;background:#fafafa">
+      {partial} partial · {failed} failed · {skipped} already complete · {done_today} done today ·
+      finished {datetime.now():%Y-%m-%d %H:%M}
+    </div>
+  </div>
+</div>"""
+    return subject, text, html
+
+
 async def run_batch(jobs: list[dict], limit: int | None = None,
                     daily_limit: int | None = None) -> int:
     """Non-interactive: scrape incomplete targets once, isolating failures.
@@ -189,28 +279,32 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
     Built for cron/systemd. `limit` caps targets processed this run; `daily_limit`
     caps targets processed per calendar day across all runs (persisted in
     data/corpus/.quota.json) so a timer firing N times still won't exceed it.
+    Sends ONE summary email per run (if any account was processed).
     Returns exit code 0 if nothing failed, 1 if any target errored.
     """
     done = skipped = partial = failed = 0
-    this_run = 0
+    records: list[dict] = []
     total = len(jobs)
+    session_start = time.monotonic()
     for i, job in enumerate(jobs, 1):
-        db, nd_path = job_paths(job)
+        db, _ = job_paths(job)
         tag = f"{job['party']}/{job['handle']}"
         if is_complete(db, job["handle"], job["since"], job["until"]):
             skipped += 1
             continue
-        if limit is not None and this_run >= limit:
+        if limit is not None and len(records) >= limit:
             print(f"\n[limit] reached per-run cap of {limit} — stopping.")
             break
         if daily_limit is not None and _daily_count() >= daily_limit:
             print(f"\n[quota] daily cap of {daily_limit} already reached today — stopping.")
             break
         print(f"\n===== [{i}/{total}] {tag} =====")
-        this_run += 1
         _bump_daily_count()   # count the attempt up-front (a crash still consumes a slot)
+        rec = {"party": job["party"], "handle": job["handle"],
+               "since": job["since"], "until": job["until"], "tweets": None}
+        t0 = time.monotonic()
         try:
-            n = await run_one(job)
+            rec["tweets"] = await run_one(job)
         except KeyboardInterrupt:
             print("\n  interrupted — progress checkpointed; re-run to resume")
             raise
@@ -218,23 +312,28 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             failed += 1
             logger.error(f"{tag} failed: {e!r}")
             print(f"  !! {tag} failed: {e!r} — continuing")
+            rec["seconds"] = time.monotonic() - t0
+            rec["status"] = "failed"
+            records.append(rec)
             continue
-        # Email only when the target is now FULLY covered -> a genuinely new dataset.
-        # A partial (rate-limited) run made progress but isn't done; it resumes next run.
+        rec["seconds"] = time.monotonic() - t0
         if is_complete(db, job["handle"], job["since"], job["until"]):
             done += 1
-            notify.send_email(
-                subject=f"[scraper] new dataset: {tag} ({n} tweets)",
-                body=(f"Completed {tag}\n"
-                      f"window {job['since']} -> {job['until']}\n"
-                      f"{n} tweets\n"
-                      f"file: {nd_path.relative_to(ROOT)}"))
+            rec["status"] = "complete"
         else:
             partial += 1
+            rec["status"] = "partial"
             print(f"  ~ {tag} made progress but isn't fully covered yet — will resume next run")
-    print(f"\nBatch summary: {this_run} processed this run — {done} newly complete, "
+        records.append(rec)
+
+    session_secs = time.monotonic() - session_start
+    print(f"\nBatch summary: {len(records)} processed this run — {done} newly complete, "
           f"{partial} partial, {failed} failed; {skipped} already complete "
           f"(of {total} targets, {_daily_count()} done today).")
+    if records:  # one summary email per run, only when something was actually processed
+        subject, text, html = build_session_email(records, done, partial, failed,
+                                                   skipped, total, _daily_count(), session_secs)
+        notify.send_email(subject, text, html=html)
     return 1 if failed else 0
 
 
