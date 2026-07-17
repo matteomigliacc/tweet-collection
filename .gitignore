@@ -1,6 +1,7 @@
-# Secrets — NEVER commit (but keep the example template)
+# Secrets — NEVER commit (but keep the example templates)
 secrets/*
 !secrets/accounts.example.json
+!secrets/smtp.example.json
 *.cookies
 accounts.db
 

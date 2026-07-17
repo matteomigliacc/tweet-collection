@@ -21,15 +21,24 @@ one row per spell, so their tweets are windowed to each tenure separately.
 `run_all.py` clips every start to the **2017-01-01 study floor** and treats
 `ongoing` as today.
 
-## `parties.csv` — official party accounts
+## `parties.csv` — official party accounts, by seat-holding spell
 
-One row per party account; scraped over the full study window (2017-01-01 → today).
+One row per **spell the party held Tweede Kamer seats** (mirrors `leaders.csv`). A
+party is scraped only while it was actually in parliament, so a party that entered
+late starts at its first seats, and one that left and returned (e.g. 50PLUS) gets
+one row per spell — both scraped into the same account file, skipping the gap.
 
 | Column | Meaning |
 |--------|---------|
 | `handle` | X handle, without `@`. |
 | `name` | Display name. |
-| `party` | Party label / output subfolder. |
+| `party` | Party label; also the output subfolder under `data/corpus/<party>/`. |
+| `seat_start` | First day of the spell, `YYYY-MM-DD` (Kamer-installation date, or a mid-term gain). |
+| `seat_end` | Last day of the spell, `YYYY-MM-DD`, or `ongoing` for currently seated. |
+| `notes` | Free text — seat counts / provenance. Avoid commas (unquoted CSV). |
+
+`run_all.py` clips every `seat_start` to the **2017-01-01 study floor**, month-aligns
+it, and treats `ongoing` as today.
 
 ## `politicians.csv` — generic frame for `collect.py`
 

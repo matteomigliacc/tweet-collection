@@ -7,7 +7,10 @@ file under output/<party>/<handle>.{sqlite,csv}.
 Rules:
   * Study floor: nothing before 2017-01-01.
   * Leaders: their tenure only, clipped to the 2017 floor. "ongoing" => today.
-  * Party accounts: 2017-01-01 -> today.
+  * Party accounts: only while the party held Tweede Kamer seats -- one
+    seat_start/seat_end spell per CSV row, clipped to the 2017 floor, month-aligned,
+    "ongoing" => today. A party that left and later returned (e.g. 50PLUS) has two
+    rows, both scraped into the one account file (the out-of-parliament gap is skipped).
   * A handle can appear twice with different parties (e.g. Klaver GroenLinks vs
     GroenLinks-PvdA) -> two separate files under the two party folders.
 
@@ -33,6 +36,7 @@ from loguru import logger
 
 from collect import run_collection, month_chunks
 from flatten import export_ndjson
+import notify
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "corpus"     # scraped output: party-named subfolders under data/corpus/<party>/
@@ -63,8 +67,13 @@ def build_jobs() -> list[dict]:
         jobs.append({"handle": r["handle"].lstrip("@").strip(), "party": r["party"],
                      "since": since, "until": until, "kind": "leader"})
     for r in read_csv(PARTIES):
+        start = datetime.strptime(r["seat_start"], "%Y-%m-%d").date().replace(day=1)
+        since = max(start, FLOOR)          # month-aligned; nothing before the floor
+        until = parse_end(r["seat_end"])
+        if since > until:
+            continue  # seat spell entirely before the 2017 floor -> nothing to fetch
         jobs.append({"handle": r["handle"].lstrip("@").strip(), "party": r["party"],
-                     "since": FLOOR, "until": date.today(), "kind": "party"})
+                     "since": since, "until": until, "kind": "party"})
     return jobs
 
 
@@ -94,8 +103,10 @@ def is_complete(db: Path, handle: str, since: date, until: date) -> bool:
     return expected_months(since, until) <= set(json.loads(row[0] or "[]"))
 
 
-async def run_one(job: dict) -> None:
-    """Scrape a single target to its tenure window and export raw ndjson."""
+async def run_one(job: dict) -> int:
+    """Scrape a single target to its tenure window and export raw ndjson.
+
+    Returns the number of tweets in the exported ndjson."""
     db, nd_path = job_paths(job)
     handle = job["handle"]
     tag = f"{job['party']}/{handle}"
@@ -103,7 +114,7 @@ async def run_one(job: dict) -> None:
         print(f"{tag} is already complete ({job['since']} -> {job['until']}). Re-exporting ndjson.")
         n = export_ndjson(db, nd_path)
         print(f"-> {nd_path.relative_to(ROOT)} ({n} tweets)")
-        return
+        return n
     print(f"\nScraping {tag}   window {job['since']} -> {job['until']} (tenure, floored at {FLOOR})\n")
     frame = [{"handle": handle, "name": "", "party": job["party"], "country": "NL"}]
     until_excl = job["until"] + timedelta(days=1)  # include the end date itself
@@ -111,6 +122,7 @@ async def run_one(job: dict) -> None:
                          skip_recent=True, verbose=True, raw=True)
     n = export_ndjson(db, nd_path)
     print(f"\n-> {nd_path.relative_to(ROOT)} ({n} tweets)")
+    return n
 
 
 def print_menu(jobs: list[dict]) -> None:
@@ -151,18 +163,67 @@ def setup_logging() -> Path:
     return log_path
 
 
+async def run_batch(jobs: list[dict]) -> int:
+    """Non-interactive: scrape every incomplete target once, isolating failures.
+
+    Built for cron/systemd. Returns a process exit code: 0 if nothing failed,
+    1 if any target errored (so a timer/monitor can alert on it).
+    """
+    done = skipped = partial = failed = 0
+    total = len(jobs)
+    for i, job in enumerate(jobs, 1):
+        db, nd_path = job_paths(job)
+        tag = f"{job['party']}/{job['handle']}"
+        if is_complete(db, job["handle"], job["since"], job["until"]):
+            skipped += 1
+            continue
+        print(f"\n===== [{i}/{total}] {tag} =====")
+        try:
+            n = await run_one(job)
+        except KeyboardInterrupt:
+            print("\n  interrupted — progress checkpointed; re-run to resume")
+            raise
+        except Exception as e:  # one bad handle must not abort the whole batch
+            failed += 1
+            logger.error(f"{tag} failed: {e!r}")
+            print(f"  !! {tag} failed: {e!r} — continuing")
+            continue
+        # Email only when the target is now FULLY covered -> a genuinely new dataset.
+        # A partial (rate-limited) run made progress but isn't done; it resumes next run.
+        if is_complete(db, job["handle"], job["since"], job["until"]):
+            done += 1
+            notify.send_email(
+                subject=f"[scraper] new dataset: {tag} ({n} tweets)",
+                body=(f"Completed {tag}\n"
+                      f"window {job['since']} -> {job['until']}\n"
+                      f"{n} tweets\n"
+                      f"file: {nd_path.relative_to(ROOT)}"))
+        else:
+            partial += 1
+            print(f"  ~ {tag} made progress but isn't fully covered yet — will resume next run")
+    print(f"\nBatch summary: {done} newly complete, {partial} partial, "
+          f"{skipped} already complete, {failed} failed (of {total} targets).")
+    return 1 if failed else 0
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="just list the targets and exit")
+    ap.add_argument("--all", action="store_true",
+                    help="scrape every incomplete target non-interactively (for cron/systemd)")
     args = ap.parse_args()
 
     jobs = build_jobs()
-    if not args.dry_run:
-        setup_logging()
-    print_menu(jobs)
     if args.dry_run:
+        print_menu(jobs)
         return
 
+    setup_logging()
+    if args.all:
+        code = await run_batch(jobs)
+        sys.exit(code)
+
+    print_menu(jobs)
     while True:
         raw = input("\nPick a number (or handle), or 'q' to quit: ").strip()
         if raw.lower() in {"q", "quit", "exit", ""}:
