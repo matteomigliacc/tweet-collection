@@ -1,6 +1,6 @@
 """Automatic batch scraper for the whole corpus.
 
-Reads data/leaders.csv (party leaders + their tenure dates) and data/parties.csv
+Reads frame/leaders.csv (party leaders + their tenure dates) and frame/parties.csv
 (party accounts), computes each target's date window, and scrapes each into its own
 file under output/<party>/<handle>.{sqlite,csv}.
 
@@ -35,9 +35,9 @@ from collect import run_collection, month_chunks
 from flatten import export_ndjson
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "data" / "corpus"   # party-named subfolders live here: data/corpus/<party>/
-LEADERS = ROOT / "data" / "leaders.csv"
-PARTIES = ROOT / "data" / "parties.csv"
+OUT = ROOT / "data" / "corpus"     # scraped output: party-named subfolders under data/corpus/<party>/
+LEADERS = ROOT / "frame" / "leaders.csv"   # committed sampling-frame inputs
+PARTIES = ROOT / "frame" / "parties.csv"
 FLOOR = date(2017, 1, 1)
 
 

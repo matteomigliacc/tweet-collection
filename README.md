@@ -39,8 +39,9 @@ idempotent (`INSERT OR IGNORE`) and a per-handle checkpoint lets an interrupted 
 | `src/scrape.py` | Interactive single-handle front-end (answer prompts, no flags). |
 | `src/run_all.py` | Batch runner over the whole corpus from `leaders.csv` + `parties.csv`. |
 | `src/flatten.py` | Flatten raw tweet JSON into a tidy CSV (or export raw `.ndjson`). |
+| `frame/` | **Sampling-frame inputs** (committed): `leaders.csv`, `parties.csv`, `politicians.csv`. |
 | `secrets/` | X account cookies — **git-ignored**, never committed. |
-| `data/` | Sampling-frame CSVs, SQLite stores, exports — **git-ignored**. |
+| `data/` | Scraped output — SQLite stores, corpus, CSV/ndjson exports, logs — **git-ignored**. |
 | `docs/` | Design spec / notes. |
 
 ## Setup
@@ -88,7 +89,7 @@ python src/load_accounts.py
 python src/scrape.py
 ```
 
-**Batch over the whole corpus** (reads `data/leaders.csv` + `data/parties.csv`):
+**Batch over the whole corpus** (reads `frame/leaders.csv` + `frame/parties.csv`):
 
 ```bash
 python src/run_all.py --dry-run   # list every target + its date window, scrape nothing
@@ -98,7 +99,7 @@ python src/run_all.py             # menu-driven; skips already-complete targets
 **Direct CLI** (scriptable):
 
 ```bash
-python src/collect.py --csv data/politicians.csv --since 2017-01-01 --until 2026-07-01 -v
+python src/collect.py --csv frame/politicians.csv --since 2017-01-01 --until 2026-07-01 -v
 python src/flatten.py --db data/tweets.sqlite --out data/tweets_flat.csv
 ```
 

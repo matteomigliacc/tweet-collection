@@ -11,7 +11,7 @@ run resume where it stopped rather than restart.
 
 Usage:
   python src/collect.py --since 2026-01-01 --until 2026-07-01
-  python src/collect.py --csv data/politicians.csv --recent-limit 3200
+  python src/collect.py --csv frame/politicians.csv --recent-limit 3200
 """
 import argparse
 import asyncio
@@ -24,7 +24,7 @@ from pathlib import Path
 from twscrape import API
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CSV = ROOT / "data" / "politicians.csv"
+DEFAULT_CSV = ROOT / "frame" / "politicians.csv"
 DB = ROOT / "data" / "tweets.sqlite"
 ACCOUNTS_DB = ROOT / "data" / "accounts.db"
 
