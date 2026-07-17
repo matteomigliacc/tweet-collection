@@ -1,0 +1,19 @@
+# Secrets — NEVER commit (but keep the example template)
+secrets/*
+!secrets/accounts.example.json
+*.cookies
+accounts.db
+
+# Data & DB
+data/
+*.sqlite
+*.parquet
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store
