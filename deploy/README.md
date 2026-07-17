@@ -46,8 +46,9 @@ systemctl enable --now scrape.timer
 
 The timer fires 4×/day (jittered ±2h). Each run does `run_all.py --all --limit 3
 --daily-limit 10`, so the first pass ramps up ~10 accounts/day, account-by-account,
-over several days; afterwards runs only fetch new months. On each newly-completed
-dataset the runner emails via `src/notify.py` (no-op until `secrets/smtp.json` exists).
+over several days; afterwards runs only fetch new months. Each run sends one HTML
+summary email via `src/notify.py` — session scrape time, a per-account table, and
+overall progress (no-op until `secrets/smtp.json` exists; no email on an empty run).
 
 ## Operating it
 
