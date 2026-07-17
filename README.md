@@ -33,6 +33,7 @@ idempotent (`INSERT OR IGNORE`) and a per-handle checkpoint lets an interrupted 
 
 | Path | Purpose |
 |------|---------|
+| `src/add_accounts.py` | Interactively add X accounts by pasting cookie strings (writes `secrets/accounts.json`). |
 | `src/load_accounts.py` | Load X accounts (via browser cookies) into twscrape's pool and verify them. |
 | `src/collect.py` | Two-pass collector (the core engine). Also runnable as a CLI. |
 | `src/scrape.py` | Interactive single-handle front-end (answer prompts, no flags). |
@@ -45,7 +46,8 @@ idempotent (`INSERT OR IGNORE`) and a per-handle checkpoint lets an interrupted 
 ## Setup
 
 After cloning, run the setup script — it creates the virtualenv, installs the
-dependencies, and drops a `secrets/accounts.json` template for you to fill in:
+dependencies, prepares `secrets/accounts.json`, and then offers to walk you
+through adding your X accounts right away:
 
 ```bash
 ./setup.sh
@@ -57,17 +59,24 @@ dependencies, and drops a `secrets/accounts.json` template for you to fill in:
 ### Provide X accounts
 
 The scraper authenticates via browser cookies from real X accounts (redundancy +
-overnight throughput). `setup.sh` copies `secrets/accounts.example.json` to
-`secrets/accounts.json` for you — open it and fill in your own accounts.
-
-Each entry needs a `username` and a `cookies` string containing at least
-`auth_token` and `ct0` (grab these from your browser's X session cookies).
-`secrets/accounts.json` is git-ignored — **never commit real cookies.**
-
-Then load and verify the pool:
+overnight throughput). The easiest way is the interactive helper — it prompts for
+each account's username and cookie string, validates them, and writes
+`secrets/accounts.json` for you:
 
 ```bash
 source .venv/bin/activate
+python src/add_accounts.py
+```
+
+`setup.sh` offers to run this for you automatically at the end.
+
+Each account needs a `username` and a `cookies` string containing at least
+`auth_token` and `ct0` (grab these from your browser's X session cookies) —
+e.g. `auth_token=abc123...; ct0=def456...`. `secrets/accounts.json` is
+git-ignored, so **real cookies are never committed.** `add_accounts.py` also
+offers to load and verify the pool for you when you're done; to do it separately:
+
+```bash
 python src/load_accounts.py
 ```
 

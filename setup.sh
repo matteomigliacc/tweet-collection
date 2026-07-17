@@ -49,6 +49,17 @@ else
   NEEDS_COOKIES=0
 fi
 
+# --- offer to add accounts interactively -----------------------------------
+# Only prompt when we have a real terminal (skip in CI / piped runs).
+if [ -t 0 ]; then
+  echo ""
+  read -r -p "Add your X accounts now (paste cookie strings)? [Y/n]: " REPLY
+  case "${REPLY:-Y}" in
+    [Nn]*) echo "Skipped — run 'python src/add_accounts.py' whenever you're ready." ;;
+    *)     python src/add_accounts.py ;;
+  esac
+fi
+
 # --- done ------------------------------------------------------------------
 echo ""
 echo "============================================================"
@@ -56,12 +67,7 @@ echo " Setup complete."
 echo ""
 echo " Next steps:"
 echo "   1. source .venv/bin/activate"
-if [ "$NEEDS_COOKIES" = "1" ]; then
-  echo "   2. Edit secrets/accounts.json  (add your X cookies)"
-  echo "   3. python src/load_accounts.py   # load + verify the account pool"
-  echo "   4. python src/scrape.py          # start scraping"
-else
-  echo "   2. python src/load_accounts.py   # load + verify the account pool"
-  echo "   3. python src/scrape.py          # start scraping"
-fi
+echo "   2. python src/add_accounts.py    # add X accounts by cookie string (if not done above)"
+echo "   3. python src/load_accounts.py   # load + verify the account pool"
+echo "   4. python src/scrape.py          # start scraping"
 echo "============================================================"
