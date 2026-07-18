@@ -30,7 +30,8 @@ bash setup.sh                       # venv + twscrape
 ```
 
 Secrets are **not** in git: copy `secrets/accounts.json` (X cookies) to the container
-separately, and — for email — create `secrets/smtp.json` (see `secrets/smtp.example.json`).
+separately, and — for notifications — create `secrets/teams.json` (Teams webhook, see
+`secrets/teams.example.json`) and/or `secrets/smtp.json` (see `secrets/smtp.example.json`).
 Existing scraped data is migrated once by rsync-ing `data/corpus/` over; the per-target
 checkpoints then make every later run skip finished months (see the repo README).
 
@@ -44,11 +45,19 @@ systemctl daemon-reload
 systemctl enable --now scrape.timer
 ```
 
-The timer fires 4×/day (jittered ±2h). Each run does `run_all.py --all --limit 3
---daily-limit 10`, so the first pass ramps up ~10 accounts/day, account-by-account,
-over several days; afterwards runs only fetch new months. Each run sends one HTML
-summary email via `src/notify.py` — session scrape time, a per-account table, and
-overall progress (no-op until `secrets/smtp.json` exists; no email on an empty run).
+The timer fires 5×/day (01/06/11/16/21h + up to 2h jitter). Each run does
+`run_all.py --all --limit 3 --daily-limit 15`, so the first pass ramps up ~15
+accounts/day, account-by-account, over several days; afterwards runs only fetch new
+months. Each run sends one summary notification via `src/notify.py` — an Adaptive
+Card to a Microsoft Teams channel (session scrape time, per-account table, overall
+progress) through a Teams *Workflows* incoming webhook (`secrets/teams.json`); if
+Teams isn't configured or the post fails it falls back to the HTML summary email
+(`secrets/smtp.json`). With neither file present notifications are a silent no-op;
+nothing is sent on an empty run.
+
+To create the Teams webhook: in the target channel choose **Workflows → "Post to a
+channel when a webhook request is received"**, copy the resulting HTTPS URL into
+`secrets/teams.json` as `webhook_url`, then test with `.venv/bin/python src/notify.py`.
 
 ## Operating it
 

@@ -93,13 +93,14 @@ def is_complete(db: Path, handle: str, since: date, until: date) -> bool:
         return False
     con = sqlite3.connect(db)
     try:
-        row = con.execute("SELECT months_done FROM checkpoint WHERE handle = ?",
-                          (handle,)).fetchone()
+        row = con.execute(
+            "SELECT months_done, replies_done FROM checkpoint WHERE handle = ?",
+            (handle,)).fetchone()
     except sqlite3.OperationalError:
-        return False
+        return False  # old schema (no replies_done yet) -> needs a Pass C run
     finally:
         con.close()
-    if not row:
+    if not row or not row[1]:  # Pass C (replies tab) not done yet
         return False
     return expected_months(since, until) <= set(json.loads(row[0] or "[]"))
 
@@ -272,6 +273,55 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
     return subject, text, html
 
 
+def build_session_card(records: list[dict], done: int, partial: int, failed: int,
+                       skipped: int, total: int, done_today: int,
+                       session_secs: float) -> dict:
+    """Compose an Adaptive Card (Teams) mirroring the session-summary email."""
+    total_tweets = sum(r["tweets"] for r in records if r.get("tweets"))
+    complete_overall = skipped + done
+    dur = _fmt_dur(session_secs)
+
+    def stat(value, label):
+        return {"type": "Column", "width": "stretch", "items": [
+            {"type": "TextBlock", "text": str(value), "size": "ExtraLarge",
+             "weight": "Bolder", "horizontalAlignment": "Center", "spacing": "None"},
+            {"type": "TextBlock", "text": label, "size": "Small", "isSubtle": True,
+             "horizontalAlignment": "Center", "spacing": "None"}]}
+
+    colour = {"complete": "Good", "partial": "Warning", "failed": "Attention"}
+    rows = []
+    for r in records:
+        tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "—"
+        rows.append({"type": "ColumnSet", "spacing": "Small", "columns": [
+            {"type": "Column", "width": "stretch", "items": [
+                {"type": "TextBlock", "spacing": "None", "wrap": True,
+                 "text": f"**@{r['handle']}** · {r['party']}"},
+                {"type": "TextBlock", "spacing": "None", "size": "Small", "isSubtle": True,
+                 "text": f"{r['since']} → {r['until']}"}]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "spacing": "None", "horizontalAlignment": "Right",
+                 "text": f"{tw} tweets · {_fmt_dur(r['seconds'])}"},
+                {"type": "TextBlock", "spacing": "None", "size": "Small", "weight": "Bolder",
+                 "horizontalAlignment": "Right",
+                 "color": colour.get(r["status"], "Default"), "text": r["status"]}]}]})
+
+    return {"type": "AdaptiveCard", "version": "1.4",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "msteams": {"width": "Full"},
+            "body": [
+                {"type": "TextBlock", "size": "Large", "weight": "Bolder",
+                 "text": "🐦 Populism scraper · session summary"},
+                {"type": "ColumnSet", "columns": [
+                    stat(f"{total_tweets:,}", "Tweets"), stat(done, "New datasets"),
+                    stat(dur, "Duration"), stat(f"{complete_overall}/{total}", "Complete")]},
+                {"type": "Container", "separator": True, "items": rows},
+                {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
+                 "separator": True,
+                 "text": (f"{partial} partial · {failed} failed · {skipped} already "
+                          f"complete · {done_today} done today · "
+                          f"finished {datetime.now():%Y-%m-%d %H:%M}")}]}
+
+
 async def run_batch(jobs: list[dict], limit: int | None = None,
                     daily_limit: int | None = None) -> int:
     """Non-interactive: scrape incomplete targets once, isolating failures.
@@ -330,10 +380,13 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
     print(f"\nBatch summary: {len(records)} processed this run — {done} newly complete, "
           f"{partial} partial, {failed} failed; {skipped} already complete "
           f"(of {total} targets, {_daily_count()} done today).")
-    if records:  # one summary email per run, only when something was actually processed
-        subject, text, html = build_session_email(records, done, partial, failed,
-                                                   skipped, total, _daily_count(), session_secs)
-        notify.send_email(subject, text, html=html)
+    if records:  # one summary notification per run, only when something was processed
+        card = build_session_card(records, done, partial, failed,
+                                  skipped, total, _daily_count(), session_secs)
+        if not notify.send_teams(card):  # Teams first; email only as fallback
+            subject, text, html = build_session_email(records, done, partial, failed,
+                                                       skipped, total, _daily_count(), session_secs)
+            notify.send_email(subject, text, html=html)
     return 1 if failed else 0
 
 

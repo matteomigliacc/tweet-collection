@@ -1,9 +1,15 @@
-"""Two-pass tweet collector for the politician sampling frame.
+"""Three-pass tweet collector for the politician sampling frame.
 
 For each handle in politicians.csv:
   Pass A (recent):  user_tweets  -> most recent timeline (X caps this ~3200)
   Pass B (window):  search "from:handle since:.. until:.."  chunked per-month,
                     which bypasses the 3200 ceiling for a bounded date range.
+  Pass C (replies): user_tweets_and_replies -> the profile's "Replies" tab
+                    (~3200 cap). Essential: X's *search* index silently omits
+                    many replies (and some plain tweets), so Pass B alone can
+                    miss ~20% of a reply-heavy account. The replies tab embeds
+                    parent tweets by OTHER authors, so Pass C keeps only tweets
+                    authored by the target user.
 
 Raw tweet JSON is stored in SQLite with tweet_id as PRIMARY KEY, so re-runs are
 idempotent (INSERT OR IGNORE) and a per-handle checkpoint lets an interrupted
@@ -47,6 +53,7 @@ def init_db(con: sqlite3.Connection) -> None:
             handle       TEXT PRIMARY KEY,
             user_id      INTEGER,
             recent_done  INTEGER DEFAULT 0,
+            replies_done INTEGER DEFAULT 0,
             months_done  TEXT DEFAULT '[]',   -- JSON list of 'YYYY-MM' completed
             status       TEXT,                -- ok | not_found | error
             error        TEXT,
@@ -54,6 +61,11 @@ def init_db(con: sqlite3.Connection) -> None:
         );
         """
     )
+    # migrate pre-Pass-C databases (no replies_done column yet)
+    try:
+        con.execute("ALTER TABLE checkpoint ADD COLUMN replies_done INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     con.commit()
 
 
@@ -68,23 +80,28 @@ def month_chunks(since: date, until: date):
 
 def load_checkpoint(con: sqlite3.Connection, handle: str) -> dict:
     row = con.execute(
-        "SELECT recent_done, months_done FROM checkpoint WHERE handle = ?", (handle,)
+        "SELECT recent_done, replies_done, months_done FROM checkpoint WHERE handle = ?",
+        (handle,)
     ).fetchone()
     if row is None:
-        return {"recent_done": 0, "months_done": []}
-    return {"recent_done": row[0], "months_done": json.loads(row[1] or "[]")}
+        return {"recent_done": 0, "replies_done": 0, "months_done": []}
+    return {"recent_done": row[0], "replies_done": row[1] or 0,
+            "months_done": json.loads(row[2] or "[]")}
 
 
-def save_checkpoint(con, handle, user_id, recent_done, months_done, status, error=None):
+def save_checkpoint(con, handle, user_id, recent_done, months_done, status,
+                    error=None, replies_done=0):
     con.execute(
-        """INSERT INTO checkpoint (handle, user_id, recent_done, months_done, status, error, updated_at)
-           VALUES (?,?,?,?,?,?,?)
+        """INSERT INTO checkpoint (handle, user_id, recent_done, replies_done,
+                                   months_done, status, error, updated_at)
+           VALUES (?,?,?,?,?,?,?,?)
            ON CONFLICT(handle) DO UPDATE SET
                user_id=excluded.user_id, recent_done=excluded.recent_done,
+               replies_done=excluded.replies_done,
                months_done=excluded.months_done, status=excluded.status,
                error=excluded.error, updated_at=excluded.updated_at""",
-        (handle, user_id, recent_done, json.dumps(months_done), status, error,
-         datetime.now(timezone.utc).isoformat()),
+        (handle, user_id, recent_done, replies_done, json.dumps(months_done),
+         status, error, datetime.now(timezone.utc).isoformat()),
     )
     con.commit()
 
@@ -173,14 +190,16 @@ def read_frame(csv_path: Path) -> list[dict]:
 
 
 async def collect_handle(api, con, row, since, until, recent_limit,
-                         skip_recent=False, verbose=False, raw=False) -> None:
+                         skip_recent=False, skip_replies=False,
+                         verbose=False, raw=False) -> None:
     handle = row["handle"].lstrip("@").strip()
     cp = load_checkpoint(con, handle)
 
     user = await api.user_by_login(handle)
     if user is None:
         save_checkpoint(con, handle, None, cp["recent_done"], cp["months_done"],
-                        "not_found", "user_by_login returned None")
+                        "not_found", "user_by_login returned None",
+                        replies_done=cp["replies_done"])
         print(f"  [!] @{handle}: not found / suspended / renamed — skipped", flush=True)
         return
     uid = user.id
@@ -202,7 +221,8 @@ async def collect_handle(api, con, row, since, until, recent_limit,
                     print(f"  [A] @{handle}: {n} recent so far ...", flush=True)
         con.commit()
         cp["recent_done"] = 1
-        save_checkpoint(con, handle, uid, 1, cp["months_done"], "ok")
+        save_checkpoint(con, handle, uid, 1, cp["months_done"], "ok",
+                        replies_done=cp["replies_done"])
         print(f"  [A] @{handle}: +{n} recent tweets", flush=True)
 
     # Pass B — bounded window, month by month
@@ -227,7 +247,8 @@ async def collect_handle(api, con, row, since, until, recent_limit,
                 n += store(con, tw, handle, uid, "search")
         con.commit()
         cp["months_done"].append(tag)
-        save_checkpoint(con, handle, uid, 1, cp["months_done"], "ok")
+        save_checkpoint(con, handle, uid, cp["recent_done"], cp["months_done"], "ok",
+                        replies_done=cp["replies_done"])
         if verbose:
             total = con.execute(
                 "SELECT COUNT(*) FROM tweets WHERE handle = ?", (handle,)
@@ -237,10 +258,33 @@ async def collect_handle(api, con, row, since, until, recent_limit,
         else:
             print(f"  [B] @{handle} {tag}: +{n} tweets", flush=True)
 
+    # Pass C — replies tab (recovers replies that X's search index omits)
+    if not skip_replies and not cp["replies_done"]:
+        n = 0
+        if raw:
+            async for rep in api.user_tweets_and_replies_raw(uid, limit=recent_limit):
+                for obj in extract_raw_tweets(rep):
+                    # the replies tab embeds parent tweets by OTHER authors
+                    if str(obj.get("legacy", {}).get("user_id_str")) != str(uid):
+                        continue
+                    n += store_raw(con, obj, handle, "replies_tab")
+        else:
+            async for tw in api.user_tweets_and_replies(uid, limit=recent_limit):
+                if tw.user.id != uid:
+                    continue
+                n += store(con, tw, handle, uid, "replies_tab")
+                if verbose and n and n % 100 == 0:
+                    print(f"  [C] @{handle}: {n} own tweets so far ...", flush=True)
+        con.commit()
+        cp["replies_done"] = 1
+        save_checkpoint(con, handle, uid, cp["recent_done"], cp["months_done"], "ok",
+                        replies_done=1)
+        print(f"  [C] @{handle}: +{n} from replies tab", flush=True)
+
 
 async def run_collection(frame, since, until, db_path,
-                         recent_limit=3200, skip_recent=False, verbose=False,
-                         raw=False) -> int:
+                         recent_limit=3200, skip_recent=False, skip_replies=False,
+                         verbose=False, raw=False) -> int:
     """Collect all handles in `frame` into `db_path`. Returns total tweets in the DB.
 
     Shared entry point for both the CLI (main) and the interactive front-end.
@@ -255,12 +299,13 @@ async def run_collection(frame, since, until, db_path,
     for row in frame:
         try:
             await collect_handle(api, con, row, since, until, recent_limit,
-                                 skip_recent=skip_recent, verbose=verbose, raw=raw)
+                                 skip_recent=skip_recent, skip_replies=skip_replies,
+                                 verbose=verbose, raw=raw)
         except Exception as e:
             h = row.get("handle", "?").lstrip("@").strip()
             prev = load_checkpoint(con, h)  # preserve any progress already made
             save_checkpoint(con, h, None, prev["recent_done"], prev["months_done"],
-                            "error", str(e))
+                            "error", str(e), replies_done=prev["replies_done"])
             print(f"  [x] @{h}: ERROR {e}", flush=True)
 
     total = con.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
@@ -278,6 +323,8 @@ async def main() -> None:
     ap.add_argument("--recent-limit", type=int, default=3200)
     ap.add_argument("--skip-recent", action="store_true",
                     help="skip Pass A (recent timeline); search-only, date-bounded")
+    ap.add_argument("--skip-replies", action="store_true",
+                    help="skip Pass C (replies tab)")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="stream per-month progress, timings, and running totals")
     args = ap.parse_args()
@@ -288,7 +335,8 @@ async def main() -> None:
     frame = read_frame(args.csv)
     await run_collection(frame, since, until, args.db,
                          recent_limit=args.recent_limit,
-                         skip_recent=args.skip_recent, verbose=args.verbose)
+                         skip_recent=args.skip_recent, skip_replies=args.skip_replies,
+                         verbose=args.verbose)
 
 
 if __name__ == "__main__":

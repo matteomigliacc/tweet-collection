@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,7 +27,40 @@ COLUMNS = [
 ]
 
 
+def _flatten_raw(handle: str, collection_pass: str, d: dict) -> dict:
+    """Flatten a raw GraphQL Tweet object (raw-mode collection / .ndjson format)."""
+    leg = d.get("legacy") or {}
+    ents = leg.get("entities") or {}
+    created = leg.get("created_at")
+    if created:  # 'Wed Aug 14 09:15:00 +0000 2023' -> ISO
+        created = datetime.strptime(created, "%a %b %d %H:%M:%S %z %Y").isoformat()
+    views = (d.get("views") or {}).get("count")
+    return {
+        "tweet_id": d.get("rest_id") or leg.get("id_str"),
+        "handle": handle,
+        "created_at": created,
+        "text": (leg.get("full_text") or "").replace("\n", " ").strip(),
+        "lang": leg.get("lang"),
+        "like_count": leg.get("favorite_count"),
+        "retweet_count": leg.get("retweet_count"),
+        "reply_count": leg.get("reply_count"),
+        "quote_count": leg.get("quote_count"),
+        "view_count": int(views) if views else None,
+        "is_retweet": "retweeted_status_result" in leg,
+        "is_reply": leg.get("in_reply_to_status_id_str") is not None,
+        "is_quote": bool(leg.get("is_quote_status")),
+        "conversation_id": leg.get("conversation_id_str"),
+        "hashtags": "|".join(h.get("text", "") for h in ents.get("hashtags") or []),
+        "mentioned_users": "|".join(
+            u.get("screen_name", "") for u in ents.get("user_mentions") or []
+        ),
+        "collection_pass": collection_pass,
+    }
+
+
 def flatten_row(handle: str, collection_pass: str, d: dict) -> dict:
+    if "legacy" in d:  # raw GraphQL object (raw-mode / corpus format)
+        return _flatten_raw(handle, collection_pass, d)
     users = d.get("mentionedUsers") or []
     return {
         "tweet_id": d.get("id"),

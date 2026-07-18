@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/populism-scraping
-ExecStart=/opt/populism-scraping/.venv/bin/python src/run_all.py --all --limit 3 --daily-limit 10
+ExecStart=/opt/populism-scraping/.venv/bin/python src/run_all.py --all --limit 3 --daily-limit 15
 TimeoutStartSec=6h
 Nice=10
 IOSchedulingClass=idle

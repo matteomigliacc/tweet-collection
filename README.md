@@ -19,11 +19,18 @@ X account cookies┤
 
 ## How it works
 
-Each politician is scraped in two passes:
+Each politician is scraped in three passes:
 
 - **Pass A — recent timeline:** the newest ~3,200 tweets (X's timeline cap).
 - **Pass B — bounded window:** `from:handle since:.. until:..` split month-by-month,
   which bypasses the 3,200 ceiling for a fixed date range.
+- **Pass C — replies tab:** the profile's "Tweets & replies" tab (~3,200 cap).
+  X's search index silently omits many replies (and some plain tweets), so Pass B
+  alone can miss ~20% of a reply-heavy account; Pass C recovers them. Parent
+  tweets by other authors embedded in that tab are filtered out.
+
+The flattened CSV marks each row `is_reply` / `is_retweet` / `is_quote`, so
+analysis can separate original tweets from replies at any time.
 
 Raw tweet JSON is stored in SQLite with `tweet_id` as the primary key, so re-runs are
 idempotent (`INSERT OR IGNORE`) and a per-handle checkpoint lets an interrupted run
