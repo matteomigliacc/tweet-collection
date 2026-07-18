@@ -1,0 +1,14 @@
+[Unit]
+Description=Nightly corpus backup to SURFdrive (rclone WebDAV)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/populism-scraping
+# never upload while a scrape is writing the databases
+ExecStartPre=/bin/bash -c 'while systemctl is-active -q scrape.service; do sleep 60; done'
+ExecStart=/opt/populism-scraping/deploy/backup.sh
+TimeoutStartSec=4h
+Nice=10
+IOSchedulingClass=idle

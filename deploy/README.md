@@ -59,6 +59,28 @@ To create the Teams webhook: in the target channel choose **Workflows → "Post 
 channel when a webhook request is received"**, copy the resulting HTTPS URL into
 `secrets/teams.json` as `webhook_url`, then test with `.venv/bin/python src/notify.py`.
 
+## Backup
+
+`backup.timer` mirrors `data/corpus/` nightly (04:30 ± 30m) to SURFdrive — the
+university's research cloud — over WebDAV, via `deploy/backup.sh` and an rclone
+remote named `surfdrive`. Overwritten/deleted files are moved to a dated
+`populism-backup/archive/<date>/` folder first, so a bad sync can never destroy
+the previous copy; a failed run posts a Teams alert. The rclone remote is
+configured once on the container with a SURFdrive *app password* (Settings →
+Security on surfdrive.surf.nl — SSO logins don't work over WebDAV):
+
+```bash
+apt-get install rclone
+rclone config create surfdrive webdav \
+    url "https://surfdrive.surf.nl/remote.php/dav/files/<user>" \
+    vendor owncloud user "<user>" pass "<app-password>"
+cp deploy/backup.service deploy/backup.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now backup.timer
+```
+
+Secrets (X cookies, `accounts.db`) are deliberately **not** uploaded to
+SURFdrive; cover those with a Proxmox vzdump of the container instead.
+
 ## Operating it
 
 ```bash
