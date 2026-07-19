@@ -56,7 +56,10 @@ def to_zeeschuimer(nd: Path) -> bytes:
     """
     now_ms = int(time.time() * 1000)
     out = []
-    for i, line in enumerate(nd.read_text().splitlines()):
+    # NB: split on real newlines only — str.splitlines() also splits on
+    # U+2028/U+2029, which occur unescaped inside tweet text and would
+    # shear valid JSON lines in half.
+    for i, line in enumerate(nd.read_text().split("\n")):
         line = line.strip()
         if not line:
             continue
