@@ -98,7 +98,14 @@ def upload_one(cfg: dict, nd: Path, label: str) -> dict:
     for _ in range(POLL_TRIES):
         st = api(cfg, "/api/check-query/", query={"key": key})
         if st.get("done"):
-            print(f"  -> done: {st.get('rows')} rows, key {key}")
+            # replace the generic "X/Twitter (via Zeeschuimer) Dataset" label
+            body = urllib.parse.urlencode({"label": label}).encode()
+            try:
+                api(cfg, f"/api/edit-dataset-label/{key}/", data=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"})
+            except Exception as e:
+                print(f"  (label change failed: {e})")
+            print(f"  -> done: {st.get('rows')} rows, key {key}, label {label!r}")
             st["label"] = label
             return st
         time.sleep(POLL_SECS)
@@ -141,7 +148,7 @@ def main() -> None:
 
     results = []
     for f in files:
-        label = f"{f.parent.name}/{f.stem}"
+        label = f"@{f.stem} ({f.parent.name})"
         try:
             results.append(upload_one(cfg, f, label))
         except Exception as e:
