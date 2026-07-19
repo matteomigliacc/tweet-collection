@@ -7,8 +7,10 @@ collects Dutch party leaders' and party accounts' tweets via twscrape for
 downstream populism analysis. `README.md` documents the pipeline; `deploy/README.md`
 documents the production deployment; `docs/` has the design spec.
 
-**Corpus rules** (`src/run_all.py`): study floor 2017-01-01; leaders scraped only for
-their tenure (`frame/leaders.csv`, `ongoing` → today); party accounts 2017 → today.
+**Corpus rules** (`src/run_all.py`): study window 2017-03-23 (TK installation) →
+2025-11-12 (TK election, `CEILING`); leaders scraped only for their tenure
+(`frame/leaders.csv`, `ongoing` → ceiling); party accounts per `frame/parties.csv`
+seat windows.
 Output is one `data/corpus/<Party>/<handle>.{sqlite,ndjson}` pair per target
 (git-ignored). Raw GraphQL tweet JSON, `tweet_id` PK, `INSERT OR IGNORE` — re-runs
 are idempotent and can only add tweets.

@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "corpus"     # scraped output: party-named subfolders under data/corpus/<party>/
 LEADERS = ROOT / "frame" / "leaders.csv"   # committed sampling-frame inputs
 PARTIES = ROOT / "frame" / "parties.csv"
-FLOOR = date(2017, 1, 1)
+FLOOR = date(2017, 3, 23)      # 2017 Tweede Kamer installation: the study window starts here
 CEILING = date(2025, 11, 12)   # 2025 Tweede Kamer election: the study window ends here
 
 

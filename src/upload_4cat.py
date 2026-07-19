@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import json
 import subprocess
 import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +35,35 @@ SECRETS = ROOT / "secrets" / "fourcat.json"
 PLATFORM = "twitter.com"  # Zeeschuimer platform id for X/Twitter
 POLL_SECS = 5
 POLL_TRIES = 60
+FLOOR = date(2017, 3, 23)      # study floor: 2017 Tweede Kamer installation (same as run_all)
+CEILING = date(2025, 11, 12)   # 2025 TK election: study window ends here
+TWEET_FMT = "%a %b %d %H:%M:%S %z %Y"
+
+
+def load_windows() -> dict:
+    """(party, handle_lower) -> [(start, end)], clipped to FLOOR..CEILING.
+
+    Keyed by party too because e.g. JesseKlaver has separate corpus files
+    (and tenure windows) under GroenLinks, GroenLinks-PvdA and PRO.
+    """
+    windows: dict = {}
+    for fn, s_col, e_col in [("frame/leaders.csv", "leader_start", "leader_end"),
+                             ("frame/parties.csv", "seat_start", "seat_end")]:
+        with open(ROOT / fn) as f:
+            for row in csv.DictReader(f):
+                h = (row.get("handle") or "").strip()
+                if not h:
+                    continue
+                s = max(date.fromisoformat(row[s_col]), FLOOR)
+                e = CEILING if row[e_col].strip() == "ongoing" \
+                    else min(date.fromisoformat(row[e_col]), CEILING)
+                # a window entirely outside FLOOR..CEILING (e.g. PRO, formed
+                # after the 2025 election) stays in the dict as an empty list:
+                # the handle is in the frame but has nothing inside the study.
+                windows.setdefault((row["party"], h.lower()), [])
+                if s <= e:
+                    windows[(row["party"], h.lower())].append((s, e))
+    return windows
 
 
 def api(cfg: dict, path: str, data: bytes | None = None,
@@ -47,7 +78,7 @@ def api(cfg: dict, path: str, data: bytes | None = None,
         return json.loads(resp.read().decode())
 
 
-def to_zeeschuimer(nd: Path) -> bytes:
+def to_zeeschuimer(nd: Path, windows: list) -> bytes:
     """Wrap bare GraphQL tweet objects in the Zeeschuimer item envelope.
 
     4CAT's /api/import-dataset/ hands the file to the zeeschuimer-import
@@ -64,6 +95,14 @@ def to_zeeschuimer(nd: Path) -> bytes:
         if not line:
             continue
         tweet = json.loads(line)
+        # clip to the study window: the DB keeps whatever any pass encountered
+        # (Replies tab reaches outside the tenure window in both directions)
+        ca = tweet.get("legacy", {}).get("created_at")
+        if not ca:
+            continue
+        d = datetime.strptime(ca, TWEET_FMT).date()
+        if not any(s <= d <= e for s, e in windows):
+            continue
         # 4CAT's map_item does tweet["id"] unguarded; twscrape output only has
         # rest_id. Synthesize the GraphQL global id Zeeschuimer would have kept.
         if "id" not in tweet and tweet.get("rest_id"):
@@ -88,8 +127,11 @@ def to_zeeschuimer(nd: Path) -> bytes:
     return ("\n".join(out) + "\n").encode()
 
 
-def upload_one(cfg: dict, nd: Path, label: str) -> dict:
-    raw = to_zeeschuimer(nd)
+def upload_one(cfg: dict, nd: Path, label: str, windows: list) -> dict:
+    raw = to_zeeschuimer(nd, windows)
+    if not raw.strip():
+        print(f"  -- {label}: no tweets inside the study window, skipping")
+        return {"label": label, "skipped": "empty window"}
     n_lines = raw.count(b"\n")
     print(f"  uploading {label}: {len(raw)/1e6:.1f} MB, {n_lines} tweets ...", flush=True)
     res = api(cfg, "/api/import-dataset/", data=raw,
@@ -149,11 +191,25 @@ def main() -> None:
     if args.dry_run:
         return
 
+    all_windows = load_windows()
     results = []
     for f in files:
         label = f"@{f.stem} ({f.parent.name})"
+        key = (f.parent.name, f.stem.lower())
+        if key in all_windows:
+            wins = all_windows[key]
+        else:
+            # not under this party in the frame: any window for the handle,
+            # else (handle not in frame at all) the full study span
+            by_handle = [(p, h) for (p, h) in all_windows if h == f.stem.lower()]
+            wins = sum((all_windows[k] for k in by_handle), []) if by_handle \
+                else [(FLOOR, CEILING)]
+        if not wins:
+            print(f"  -- {label}: window lies entirely outside the study span, skipping")
+            results.append({"label": label, "skipped": "outside study span"})
+            continue
         try:
-            results.append(upload_one(cfg, f, label))
+            results.append(upload_one(cfg, f, label, wins))
         except Exception as e:
             print(f"  !! {label} failed: {e}")
             results.append({"label": label, "error": str(e)})
