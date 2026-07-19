@@ -44,11 +44,13 @@ OUT = ROOT / "data" / "corpus"     # scraped output: party-named subfolders unde
 LEADERS = ROOT / "frame" / "leaders.csv"   # committed sampling-frame inputs
 PARTIES = ROOT / "frame" / "parties.csv"
 FLOOR = date(2017, 1, 1)
+CEILING = date(2025, 11, 12)   # 2025 Tweede Kamer election: the study window ends here
 
 
 def parse_end(s: str) -> date:
     s = s.strip().lower()
-    return date.today() if s == "ongoing" else datetime.strptime(s, "%Y-%m-%d").date()
+    end = date.today() if s == "ongoing" else datetime.strptime(s, "%Y-%m-%d").date()
+    return min(end, CEILING)
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -117,7 +119,7 @@ async def run_one(job: dict) -> int:
         n = export_ndjson(db, nd_path)
         print(f"-> {nd_path.relative_to(ROOT)} ({n} tweets)")
         return n
-    print(f"\nScraping {tag}   window {job['since']} -> {job['until']} (tenure, floored at {FLOOR})\n")
+    print(f"\nScraping {tag}   window {job['since']} -> {job['until']} (tenure, clipped to {FLOOR}..{CEILING})\n")
     frame = [{"handle": handle, "name": "", "party": job["party"], "country": "NL"}]
     until_excl = job["until"] + timedelta(days=1)  # include the end date itself
     await run_collection(frame, job["since"], until_excl, db,
@@ -322,8 +324,32 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
                           f"finished {datetime.now():%Y-%m-%d %H:%M}")}]}
 
 
+def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> dict:
+    """Compose a small Adaptive Card for ONE finished account (--notify-each)."""
+    colour = {"complete": "Good", "partial": "Warning", "failed": "Attention"}
+    icon = {"complete": "✅", "partial": "🟡", "failed": "❌"}
+    tw = f"{rec['tweets']:,}" if rec.get("tweets") is not None else "—"
+    return {"type": "AdaptiveCard", "version": "1.4",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "msteams": {"width": "Full"},
+            "body": [
+                {"type": "TextBlock", "size": "Large", "weight": "Bolder", "wrap": True,
+                 "text": f"{icon.get(rec['status'], '•')} @{rec['handle']} · {rec['party']}"},
+                {"type": "FactSet", "facts": [
+                    {"title": "Status", "value": rec["status"]},
+                    {"title": "Tweets", "value": tw},
+                    {"title": "Window", "value": f"{rec['since']} → {rec['until']}"},
+                    {"title": "Took", "value": _fmt_dur(rec["seconds"])}]},
+                {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
+                 "separator": True,
+                 "color": colour.get(rec["status"], "Default"),
+                 "text": (f"Target {index}/{total} · {done_overall}/{total} complete · "
+                          f"{datetime.now():%H:%M}")}]}
+
+
 async def run_batch(jobs: list[dict], limit: int | None = None,
-                    daily_limit: int | None = None) -> int:
+                    daily_limit: int | None = None,
+                    notify_each: bool = False) -> int:
     """Non-interactive: scrape incomplete targets once, isolating failures.
 
     Built for cron/systemd. `limit` caps targets processed this run; `daily_limit`
@@ -365,6 +391,8 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             rec["seconds"] = time.monotonic() - t0
             rec["status"] = "failed"
             records.append(rec)
+            if notify_each:
+                notify.send_teams(build_account_card(rec, i, total, skipped + done))
             continue
         rec["seconds"] = time.monotonic() - t0
         if is_complete(db, job["handle"], job["since"], job["until"]):
@@ -375,6 +403,8 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             rec["status"] = "partial"
             print(f"  ~ {tag} made progress but isn't fully covered yet — will resume next run")
         records.append(rec)
+        if notify_each:
+            notify.send_teams(build_account_card(rec, i, total, skipped + done))
 
     session_secs = time.monotonic() - session_start
     print(f"\nBatch summary: {len(records)} processed this run — {done} newly complete, "
@@ -399,6 +429,9 @@ async def main() -> None:
                     help="with --all: scrape at most N targets this run")
     ap.add_argument("--daily-limit", type=int, default=None, metavar="M",
                     help="with --all: scrape at most M targets per calendar day (across runs)")
+    ap.add_argument("--notify-each", action="store_true",
+                    help="with --all: post a Teams card after every account, not just "
+                         "the end-of-session summary")
     args = ap.parse_args()
 
     jobs = build_jobs()
@@ -408,7 +441,8 @@ async def main() -> None:
 
     setup_logging()
     if args.all:
-        code = await run_batch(jobs, limit=args.limit, daily_limit=args.daily_limit)
+        code = await run_batch(jobs, limit=args.limit, daily_limit=args.daily_limit,
+                               notify_each=args.notify_each)
         sys.exit(code)
 
     print_menu(jobs)
