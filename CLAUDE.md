@@ -64,9 +64,9 @@ Server specifics:
 
 # Validation against the professors' reference data
 
-Reference scrapes live in `~/Raw Data` (top level + party subfolders). Files named
-"captured Mar/Apr/Jun 2026" are the professors'; **July-2026 files are Matteo's own
-runs** — exclude them when benchmarking. Some handles have first + second runs:
+Reference scrapes live in `~/Raw Data` (top level + party subfolders). **The entire
+folder is the professors' work, including the July-2026 first/second-run files**
+(confirmed by Matteo 2026-07-19). Some handles have first + second runs:
 merge them by tweet ID for the professors' "most complete picture".
 
 The agreed metric: clip both datasets to the tenure window
