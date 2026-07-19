@@ -19,7 +19,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -59,6 +61,16 @@ def to_zeeschuimer(nd: Path) -> bytes:
         if not line:
             continue
         tweet = json.loads(line)
+        # 4CAT's map_item does tweet["id"] unguarded; twscrape output only has
+        # rest_id. Synthesize the GraphQL global id Zeeschuimer would have kept.
+        if "id" not in tweet and tweet.get("rest_id"):
+            tweet["id"] = base64.b64encode(f"Tweet:{tweet['rest_id']}".encode()).decode()
+        # A quoted tweet that was deleted arrives as {"result": {"__typename":
+        # "TweetUnavailable"}}; 4CAT's mapper indexes ["result"]["legacy"]
+        # unguarded and crashes on it, so drop the stub.
+        qr = (tweet.get("quoted_status_result") or {}).get("result") or {}
+        if tweet.get("quoted_status_result") and "legacy" not in qr and "tweet" not in qr:
+            del tweet["quoted_status_result"]
         out.append(json.dumps({
             "nav_index": i,
             "item_id": tweet.get("rest_id", str(i)),
@@ -101,10 +113,19 @@ def main() -> None:
     ap.add_argument("--handle", action="append", default=None,
                     help="only upload these handles (repeatable)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-sync", action="store_true",
+                    help="skip the rsync from the scraper server before uploading")
     args = ap.parse_args()
 
     cfg = json.loads(SECRETS.read_text())
     corpus = Path(args.corpus)
+    if not args.no_sync and corpus == ROOT / "data" / "corpus_server":
+        print("syncing corpus from server ...", flush=True)
+        subprocess.run(
+            ["rsync", "-rtz", "-e", "ssh -i " + str(Path.home() / ".ssh" / "id_ed25519_scraper"),
+             "--include=*/", "--include=*.ndjson", "--exclude=*",
+             "root@192.168.1.106:/opt/populism-scraping/data/corpus/", str(corpus) + "/"],
+            check=True)
     files = sorted(corpus.glob("*/*.ndjson"))
     if args.handle:
         want = {h.lower() for h in args.handle}
