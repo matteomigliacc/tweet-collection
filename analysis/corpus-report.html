@@ -1,0 +1,290 @@
+<title>Corpus vs professors — missing and added</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --bg:#faf9f6; --panel:#ffffff; --ink:#1d2733; --ink2:#5a6672; --ink3:#8a94a0;
+  --line:#e4e1da; --accent:#2a6ea6; --accent-soft:#d8e6f2;
+  --c-rescrape:#c0762e; --c-inject:#3d78b3; --c-minor:#8a63b8; --c-ok:#b6bcc2;
+  --c-added:#3f8f6f; --added-soft:#e0efe8;
+  --chip-rescrape:#f7ead9; --chip-inject:#e3edf7; --chip-minor:#efe7f8; --chip-ok:#eef0f2;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#15191e; --panel:#1c2229; --ink:#e8e6e1; --ink2:#a8b0b8; --ink3:#727c86;
+  --line:#2c343d; --accent:#5d97cf; --accent-soft:#24364a;
+  --c-rescrape:#c8792c; --c-inject:#4a86c8; --c-minor:#9a6cd0; --c-ok:#4a545e;
+  --c-added:#4c9e7c; --added-soft:#1e3830;
+  --chip-rescrape:#3d2d1a; --chip-inject:#233649; --chip-minor:#322641; --chip-ok:#262d34;
+}}
+:root[data-theme="dark"]{
+  --bg:#15191e; --panel:#1c2229; --ink:#e8e6e1; --ink2:#a8b0b8; --ink3:#727c86;
+  --line:#2c343d; --accent:#5d97cf; --accent-soft:#24364a;
+  --c-rescrape:#c8792c; --c-inject:#4a86c8; --c-minor:#9a6cd0; --c-ok:#4a545e;
+  --c-added:#4c9e7c; --added-soft:#1e3830;
+  --chip-rescrape:#3d2d1a; --chip-inject:#233649; --chip-minor:#322641; --chip-ok:#262d34;
+}
+:root[data-theme="light"]{
+  --bg:#faf9f6; --panel:#ffffff; --ink:#1d2733; --ink2:#5a6672; --ink3:#8a94a0;
+  --line:#e4e1da; --accent:#2a6ea6; --accent-soft:#d8e6f2;
+  --c-rescrape:#c0762e; --c-inject:#3d78b3; --c-minor:#8a63b8; --c-ok:#b6bcc2;
+  --c-added:#3f8f6f; --added-soft:#e0efe8;
+  --chip-rescrape:#f7ead9; --chip-inject:#e3edf7; --chip-minor:#efe7f8; --chip-ok:#eef0f2;
+}
+*{box-sizing:border-box}
+body{background:var(--bg); color:var(--ink); margin:0;
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+.wrap{max-width:940px; margin:0 auto; padding:32px 20px 80px}
+header h1{font-family:Charter,Georgia,serif; font-size:1.7rem; font-weight:700; margin:0 0 4px; text-wrap:balance}
+header p{color:var(--ink2); margin:0; max-width:68ch}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums}
+.stats{display:flex; gap:12px; flex-wrap:wrap; margin:22px 0 8px}
+.stat{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px 16px; min-width:130px}
+.stat b{display:block; font-size:1.35rem; font-variant-numeric:tabular-nums}
+.stat span{font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--ink3)}
+.stat.gain b{color:var(--c-added)}
+h2{font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; color:var(--ink3); font-weight:600; margin:30px 0 10px}
+.sub{color:var(--ink2); font-size:.86rem; margin:-4px 0 12px; max-width:70ch}
+.legend{display:flex; gap:16px; flex-wrap:wrap; font-size:.8rem; color:var(--ink2); margin:0 0 12px}
+.legend i{display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px}
+.chart{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px 18px}
+.row{display:grid; grid-template-columns:150px 1fr 110px; gap:10px; align-items:center; padding:2px 0}
+.row .name{font-size:.82rem; text-align:right; color:var(--ink2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.row .name b{color:var(--ink); font-weight:600}
+.track{background:var(--bg); border-radius:3px; height:14px; position:relative}
+.fill{height:100%; border-radius:3px; min-width:2px}
+.row .val{font-size:.78rem; color:var(--ink2)}
+.row:hover .name b{color:var(--accent)}
+/* diverging chart: losses left of centre, gains right */
+.drow{display:grid; grid-template-columns:150px 1fr; gap:10px; align-items:center; padding:2px 0}
+.dtrack{position:relative; height:15px; display:flex; align-items:center}
+.dtrack::before{content:""; position:absolute; left:50%; top:-1px; bottom:-1px; width:1px; background:var(--line)}
+.dhalf{flex:1; display:flex; height:100%; align-items:center}
+.dhalf.l{justify-content:flex-end}
+.dbar{height:100%; min-width:1px}
+.dhalf.l .dbar{border-radius:3px 0 0 3px}
+.dhalf.r .dbar{border-radius:0 3px 3px 0; background:var(--c-added)}
+.dnum{font-size:.72rem; color:var(--ink3); padding:0 6px; white-space:nowrap; font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.axis{display:grid; grid-template-columns:150px 1fr; gap:10px; margin-top:8px}
+.axis .ends{display:flex; justify-content:space-between; font-size:.7rem; color:var(--ink3);
+  text-transform:uppercase; letter-spacing:.05em}
+#tip{position:fixed; pointer-events:none; background:var(--ink); color:var(--bg); font-size:.75rem;
+  padding:5px 9px; border-radius:4px; display:none; z-index:9; white-space:pre; line-height:1.5}
+.sec{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px 18px; margin:10px 0;
+  border-left:3px solid var(--c-ok)}
+.sec.rescrape{border-left-color:var(--c-rescrape)}
+.sec.inject{border-left-color:var(--c-inject)}
+.sec.minor{border-left-color:var(--c-minor)}
+.sec.added{border-left-color:var(--c-added)}
+.sec h3{margin:0 0 4px; font-size:1.02rem; font-family:Charter,Georgia,serif}
+.sec p{margin:0 0 10px; color:var(--ink2); font-size:.88rem; max-width:70ch}
+.sec p:last-child{margin-bottom:0}
+table{border-collapse:collapse; width:100%; font-size:.82rem}
+th{text-align:left; font-weight:600; color:var(--ink3); font-size:.7rem; text-transform:uppercase;
+  letter-spacing:.05em; padding:5px 10px 5px 0; border-bottom:1px solid var(--line)}
+td{padding:5px 10px 5px 0; border-bottom:1px solid var(--line); vertical-align:top}
+td.num, th.num{text-align:right; font-variant-numeric:tabular-nums}
+td.gain{color:var(--c-added)}
+.tblwrap{overflow-x:auto}
+.chip{border-radius:4px; padding:1px 7px; font-size:.7rem; font-weight:600; white-space:nowrap}
+.chip.rescrape{background:var(--chip-rescrape)}
+.chip.inject{background:var(--chip-inject)}
+.chip.minor{background:var(--chip-minor)}
+.chip.ok{background:var(--chip-ok)}
+.note{font-size:.85rem; color:var(--ink2)}
+.note b{color:var(--ink)}
+.flag{background:var(--added-soft); border:1px solid var(--line); border-left:3px solid var(--c-added);
+  border-radius:6px; padding:12px 16px; margin:10px 0; font-size:.88rem; color:var(--ink2); max-width:none}
+.flag b{color:var(--ink)}
+</style>
+<div class="wrap">
+<header>
+  <h1>What the corpus is missing &mdash; and what it adds</h1>
+  <p>Server corpus vs the professors&rsquo; reference scrapes (<span class="mono">~/Raw Data</span>, runs merged
+  by tweet ID, author-filtered, clipped to each target&rsquo;s tenure/seat spells inside the study window
+  <span class="mono">2017-03-23 &rarr; 2025-11-12</span>). A party that lost its seats and returned later is
+  counted only for the spells it actually held. Rebuilt from the
+  live server corpus on <span id="stamp">&mdash;</span>.</p>
+</header>
+<div class="stats">
+  <div class="stat"><b class="mono" id="s-handles">&mdash;</b><span>handles compared</span></div>
+  <div class="stat"><b class="mono" id="s-ref">&mdash;</b><span>reference tweets</span></div>
+  <div class="stat"><b class="mono" id="s-missing">&mdash;</b><span>missing from corpus</span></div>
+  <div class="stat gain"><b class="mono" id="s-extra">&mdash;</b><span>added by our scrape</span></div>
+  <div class="stat"><b class="mono" id="s-recall">&mdash;</b><span>overall recall</span></div>
+</div>
+
+<h2>Missing vs added, per handle</h2>
+<p class="sub">Each handle sits on a shared scale. Left of the line are reference tweets the corpus does not
+have; right of the line are tweets the corpus holds that the reference files do not. Sorted worst net
+position first &mdash; everything below the fold is a handle where our scrape is <em>ahead</em>.</p>
+<div class="legend">
+  <span><i style="background:var(--c-rescrape)"></i>error-spike bug &middot; re-scrape</span>
+  <span><i style="background:var(--c-inject)"></i>search hides history &middot; inject</span>
+  <span><i style="background:var(--c-minor)"></i>minor scatter</span>
+  <span><i style="background:var(--c-ok)"></i>complete (&ge;99%, &le;20 missing)</span>
+  <span><i style="background:var(--c-added)"></i>added by us</span>
+</div>
+<div class="chart">
+  <div id="dchart"></div>
+  <div class="axis"><div></div><div class="ends"><span>&larr; missing</span><span>added &rarr;</span></div></div>
+</div>
+
+<h2>Recall per handle &mdash; lowest first</h2>
+<p class="sub">Recall counts only what the professors have: shared IDs &divide; reference IDs in window.
+It is deliberately blind to the extra tweets above, which is why a handle can sit at 26% recall and
+still hold a thousand tweets the reference files never captured.</p>
+<div class="chart" id="chart"></div>
+
+<h2>Diagnosis &amp; fixes</h2>
+<div class="sec rescrape">
+  <h3>1 &middot; Error-spike casualties — fix by re-scraping (<span id="tot-rescrape">—</span> tweets)</h3>
+  <p>Seven party accounts were scraped 23:10&ndash;00:20 while X&rsquo;s backend threw
+  <span class="mono">Dependency/Timeout</span> errors (~700 warnings, peaking at 209 per 10&nbsp;min).
+  Each errored search query silently returned 0 tweets and the month was checkpointed as done —
+  100% of zero-result months were immediately preceded by a warning. The tweets are still on X:
+  reset checkpoints for these handles and re-run at a calm hour.</p>
+  <div class="tblwrap"><table id="t-rescrape"></table></div>
+</div>
+<div class="sec inject">
+  <h3>2 &middot; Structural search gaps — solved by fetching each tweet by ID (<span id="tot-inject">—</span> tweets)</h3>
+  <p>X&rsquo;s search index does not return old @-replies once they fall beyond the ~3,200-tweet
+  Replies-tab reach. No amount of re-scraping reaches them, and narrowing the query window does not
+  help either — a single-day search of a reply-heavy account still returns only what the index holds.</p>
+  <div class="flag"><b>This bucket is empty as of 20&nbsp;Jul, and the reasoning behind it was wrong.</b>
+  The conclusion here used to be that these tweets could only be injected from the professors&rsquo;
+  JSON, on the evidence that Segers was checkpoint-reset, re-scraped from scratch in a run with zero
+  backend errors, and came back with the same <span id="segers-hole">&mdash;</span>-tweet hole. That
+  evidence was real but the inference was too broad. Search cannot reach these tweets;
+  <span class="mono">tweet_details</span> can. Asking X for all 1,834 Segers IDs directly returned
+  <b>1,687 tweets plus 157 thread-mates, with zero deleted</b> — <b>75.6% &rarr; 100%</b>. Nothing was
+  injected: the tweets were live on X the whole time, just not searchable. Recovered tweets carry
+  <span class="mono">source=&#39;by_id&#39;</span> so provenance stays auditable.</div>
+  <div class="flag"><b>Hugo de Jonge left this bucket earlier the same day.</b> A re-scrape recovered
+  <b>196 of his 197</b> missing tweets — 190 from June 2020 alone, a single month that had come back
+  empty and been checkpointed done anyway. Between the two cases the diagnostic is: a hole concentrated
+  in one or two months is a checkpointing failure and re-scrapes away; a hole spread evenly across years
+  is the search index, and that one needs fetching by ID.</div>
+  <div class="tblwrap"><table id="t-inject"></table></div>
+</div>
+<div class="sec minor">
+  <h3>3 &middot; Minor scatter (<span id="tot-minor">—</span> tweets across everyone else)</h3>
+  <p>Since-deleted tweets, edit-history ID changes, and a handful of search misses, spread thin over
+  every remaining handle. Not worth chasing individually; most would come along free with the two
+  fixes above. Handles with nothing missing are omitted here.</p>
+  <div class="tblwrap"><table id="t-minor"></table></div>
+</div>
+<div class="sec added">
+  <h3>Where the corpus is ahead</h3>
+  <p>The reference scrapes stop at their run date and lean on the same search index we do, so our
+  Replies-tab pass and later runs pick up tweets they never had. These are net additions to the
+  research corpus, listed largest first.</p>
+  <div class="tblwrap"><table id="t-extra"></table></div>
+</div>
+<div class="sec">
+  <h3>Not comparable</h3>
+  <p class="note">
+  <b>Estherouwehand</b> — server file is empty (0 tweets); needs a scrape before any comparison.<br>
+  <b>markrutte</b> — account is private; 2022&ndash;23 partially recovered from Rijksarchief PDFs, no professor reference.<br>
+  <b>JuisteAntwoord (JA21)</b> — no professor reference file exists; scraped during the error spike, so treat it as a re-scrape candidate anyway.<br>
+  <b>LianedenHaan</b> — account no longer exists on X (skipped by the scraper).<br>
+  <b>progressiefned / NwSocContract tail windows</b> — clipped by the 2025-11-12 study ceiling.</p>
+</div>
+
+<h2>All handles</h2>
+<div class="tblwrap sec" style="border-left:none"><table id="t-all"></table></div>
+</div>
+<div id="tip" role="presentation"></div>
+<script>
+const DATA = [{"handle": "50pluspartij", "party": "50PLUS", "corpus": 241, "ref": 2495, "shared": 241, "missing": 2254, "extra": 0, "recall": 9.7, "miss_years": {"2017": 651, "2018": 619, "2019": 409, "2020": 377, "2021": 198}, "miss_kind": {"standalone": 2004, "reply": 107, "quote": 143}, "cat": "rescrape"}, {"handle": "BoerBurgerB", "party": "BBB", "corpus": 1004, "ref": 7465, "shared": 808, "missing": 6657, "extra": 196, "recall": 10.8, "miss_years": {"2021": 1488, "2022": 2741, "2023": 1396, "2024": 599, "2025": 433}, "miss_kind": {"reply": 3465, "standalone": 2007, "quote": 1185}, "cat": "rescrape"}, {"handle": "fvdemocratie", "party": "FvD", "corpus": 3362, "ref": 9007, "shared": 2344, "missing": 6663, "extra": 1018, "recall": 26.0, "miss_years": {"2017": 829, "2018": 758, "2019": 585, "2020": 850, "2021": 1199, "2022": 1123, "2023": 1053, "2024": 240, "2025": 14, "2026": 12}, "miss_kind": {"standalone": 5779, "reply": 237, "quote": 647}, "cat": "rescrape"}, {"handle": "PartijvdDieren", "party": "PvdD", "corpus": 2685, "ref": 7774, "shared": 2019, "missing": 5755, "extra": 666, "recall": 26.0, "miss_years": {"2017": 518, "2018": 611, "2019": 989, "2020": 860, "2021": 1183, "2022": 745, "2023": 546, "2024": 153, "2025": 150}, "miss_kind": {"reply": 2393, "standalone": 2983, "quote": 379}, "cat": "rescrape"}, {"handle": "SGPnieuws", "party": "SGP", "corpus": 910, "ref": 2787, "shared": 792, "missing": 1995, "extra": 118, "recall": 28.4, "miss_years": {"2017": 27, "2018": 47, "2019": 131, "2020": 168, "2021": 443, "2022": 192, "2023": 344, "2024": 371, "2025": 271, "2026": 1}, "miss_kind": {"standalone": 1454, "reply": 420, "quote": 121}, "cat": "rescrape"}, {"handle": "cdavandaag", "party": "CDA", "corpus": 7654, "ref": 17975, "shared": 5866, "missing": 12109, "extra": 1788, "recall": 32.6, "miss_years": {"2017": 8891, "2018": 1299, "2019": 1208, "2020": 364, "2021": 316, "2023": 6, "2025": 2, "2026": 23}, "miss_kind": {"reply": 12087, "standalone": 22}, "cat": "rescrape"}, {"handle": "denknl", "party": "DENK", "corpus": 3238, "ref": 3410, "shared": 2328, "missing": 1082, "extra": 910, "recall": 68.3, "miss_years": {"2017": 177, "2018": 442, "2019": 267, "2020": 146, "2021": 4, "2022": 17, "2023": 21, "2024": 5, "2025": 2, "2026": 1}, "miss_kind": {"standalone": 924, "reply": 100, "quote": 58}, "cat": "rescrape"}, {"handle": "Gertjansegers", "party": "ChristenUnie", "corpus": 6326, "ref": 8174, "shared": 6104, "missing": 2070, "extra": 222, "recall": 74.7, "miss_years": {"2017": 491, "2018": 446, "2019": 229, "2020": 275, "2021": 246, "2022": 383}, "miss_kind": {"reply": 2055, "quote": 14, "standalone": 1}, "cat": "inject"}, {"handle": "ChristenUnie", "party": "ChristenUnie", "corpus": 3534, "ref": 2005, "shared": 1852, "missing": 153, "extra": 1682, "recall": 92.4, "miss_years": {"2017": 134, "2018": 18, "2021": 1}, "miss_kind": {"reply": 144, "quote": 2, "standalone": 7}, "cat": "minor"}, {"handle": "hugodejonge", "party": "CDA", "corpus": 2970, "ref": 3034, "shared": 2837, "missing": 197, "extra": 133, "recall": 93.5, "miss_years": {"2020": 197}, "miss_kind": {"reply": 156, "standalone": 39, "quote": 2}, "cat": "inject"}, {"handle": "NwSocContract", "party": "NSC", "corpus": 1420, "ref": 984, "shared": 938, "missing": 46, "extra": 482, "recall": 95.3, "miss_years": {"2024": 29, "2025": 17}, "miss_kind": {"reply": 46}, "cat": "minor"}, {"handle": "VoltNederland", "party": "Volt", "corpus": 2003, "ref": 1255, "shared": 1201, "missing": 54, "extra": 802, "recall": 95.7, "miss_years": {"2021": 12, "2022": 36, "2023": 3, "2024": 3}, "miss_kind": {"reply": 54}, "cat": "minor"}, {"handle": "lientje1967", "party": "BBB", "corpus": 32261, "ref": 27374, "shared": 27068, "missing": 306, "extra": 5193, "recall": 98.9, "miss_years": {"2021": 286, "2025": 6, "2026": 14}, "miss_kind": {"reply": 218, "standalone": 37, "quote": 51}, "cat": "inject"}, {"handle": "Attjekuiken", "party": "PvdA", "corpus": 692, "ref": 568, "shared": 563, "missing": 5, "extra": 129, "recall": 99.1, "miss_years": {"2022": 5}, "miss_kind": {"reply": 5}, "cat": "ok"}, {"handle": "thierrybaudet", "party": "FvD", "corpus": 12914, "ref": 11440, "shared": 11356, "missing": 84, "extra": 1558, "recall": 99.3, "miss_years": {"2017": 6, "2018": 6, "2019": 1, "2020": 2, "2021": 25, "2022": 25, "2023": 12, "2024": 5, "2025": 2}, "miss_kind": {"quote": 82, "standalone": 2}, "cat": "minor"}, {"handle": "HenriBontenbal", "party": "CDA", "corpus": 2079, "ref": 1706, "shared": 1696, "missing": 10, "extra": 383, "recall": 99.4, "miss_years": {"2024": 4, "2025": 6}, "miss_kind": {"reply": 10}, "cat": "ok"}, {"handle": "geertwilderspvv", "party": "PVV", "corpus": 12665, "ref": 11568, "shared": 11514, "missing": 54, "extra": 1151, "recall": 99.5, "miss_years": {"2017": 5, "2018": 9, "2019": 3, "2020": 2, "2021": 12, "2022": 11, "2023": 12}, "miss_kind": {"quote": 52, "standalone": 2}, "cat": "minor"}, {"handle": "Eerdmans", "party": "JA21", "corpus": 1976, "ref": 337, "shared": 336, "missing": 1, "extra": 1640, "recall": 99.7, "miss_years": {"2020": 1}, "miss_kind": {"reply": 1}, "cat": "ok"}, {"handle": "MarijnissenL", "party": "SP", "corpus": 5931, "ref": 5105, "shared": 5097, "missing": 8, "extra": 834, "recall": 99.8, "miss_years": {"2018": 1, "2019": 1, "2020": 3, "2021": 3}, "miss_kind": {"reply": 1, "quote": 6, "standalone": 1}, "cat": "ok"}, {"handle": "dilanyesilgoz", "party": "VVD", "corpus": 2026, "ref": 1280, "shared": 1279, "missing": 1, "extra": 747, "recall": 99.9, "miss_years": {"2025": 1}, "miss_kind": {"reply": 1}, "cat": "ok"}, {"handle": "GroenLinks", "party": "GroenLinks", "corpus": 8778, "ref": 6822, "shared": 6814, "missing": 8, "extra": 1964, "recall": 99.9, "miss_years": {"2019": 5, "2021": 3}, "miss_kind": {"quote": 2, "reply": 5, "standalone": 1}, "cat": "ok"}, {"handle": "jimmydijk", "party": "SP", "corpus": 1863, "ref": 1610, "shared": 1609, "missing": 1, "extra": 254, "recall": 99.9, "miss_years": {"2024": 1}, "miss_kind": {"reply": 1}, "cat": "ok"}, {"handle": "LodewijkA", "party": "PvdA", "corpus": 4232, "ref": 3967, "shared": 3962, "missing": 5, "extra": 270, "recall": 99.9, "miss_years": {"2018": 2, "2019": 3}, "miss_kind": {"quote": 2, "reply": 2, "standalone": 1}, "cat": "ok"}, {"handle": "mirjambikker", "party": "ChristenUnie", "corpus": 2464, "ref": 1546, "shared": 1545, "missing": 1, "extra": 919, "recall": 99.9, "miss_years": {"2024": 1}, "miss_kind": {"reply": 1}, "cat": "ok"}, {"handle": "PieterOmtzigt", "party": "NSC", "corpus": 5076, "ref": 4033, "shared": 4030, "missing": 3, "extra": 1046, "recall": 99.9, "miss_years": {"2022": 3}, "miss_kind": {"quote": 3}, "cat": "ok"}, {"handle": "PvdA", "party": "PvdA", "corpus": 6601, "ref": 4903, "shared": 4899, "missing": 4, "extra": 1702, "recall": 99.9, "miss_years": {"2019": 1, "2020": 1, "2021": 2}, "miss_kind": {"quote": 1, "reply": 3}, "cat": "ok"}, {"handle": "wbhoekstra", "party": "CDA", "corpus": 2258, "ref": 2172, "shared": 2170, "missing": 2, "extra": 88, "recall": 99.9, "miss_years": {"2021": 2}, "miss_kind": {"reply": 2}, "cat": "ok"}, {"handle": "chris_stoffer", "party": "SGP", "corpus": 779, "ref": 399, "shared": 399, "missing": 0, "extra": 380, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "DassenLaurens", "party": "Volt", "corpus": 1832, "ref": 1191, "shared": 1191, "missing": 0, "extra": 641, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "F__Timmermans", "party": "GroenLinks-PvdA", "corpus": 1401, "ref": 1012, "shared": 1012, "missing": 0, "extra": 389, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "HenkKrol", "party": "50PLUS", "corpus": 3530, "ref": 3458, "shared": 3458, "missing": 0, "extra": 72, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "JesseKlaver", "party": "PRO", "corpus": 2685, "ref": 2019, "shared": 2019, "missing": 0, "extra": 666, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "keesvdstaaij", "party": "SGP", "corpus": 2219, "ref": 1014, "shared": 1014, "missing": 0, "extra": 1205, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "lidewij_devos", "party": "FvD", "corpus": 547, "ref": 228, "shared": 228, "missing": 0, "extra": 319, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "Nvanvroonhoven", "party": "NSC", "corpus": 42, "ref": 38, "shared": 38, "missing": 0, "extra": 4, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "PloumenLilianne", "party": "PvdA", "corpus": 652, "ref": 562, "shared": 562, "missing": 0, "extra": 90, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "Robjetten", "party": "D66", "corpus": 761, "ref": 665, "shared": 665, "missing": 0, "extra": 96, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "SigridKaag", "party": "D66", "corpus": 626, "ref": 547, "shared": 547, "missing": 0, "extra": 79, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "SPnl", "party": "SP", "corpus": 5356, "ref": 4714, "shared": 4714, "missing": 0, "extra": 642, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "StephanvBaarle", "party": "DENK", "corpus": 411, "ref": 278, "shared": 278, "missing": 0, "extra": 133, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "sybrandbuma", "party": "CDA", "corpus": 198, "ref": 120, "shared": 120, "missing": 0, "extra": 78, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "tunahankuzu", "party": "DENK", "corpus": 2234, "ref": 356, "shared": 356, "missing": 0, "extra": 1878, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "vanHijum", "party": "NSC", "corpus": 121, "ref": 70, "shared": 70, "missing": 0, "extra": 51, "recall": 100.0, "miss_years": {}, "miss_kind": {}, "cat": "ok"}, {"handle": "VVD", "party": "VVD", "corpus": 6127, "ref": 4033, "shared": 4032, "missing": 1, "extra": 2095, "recall": 100.0, "miss_years": {"2017": 1}, "miss_kind": {"standalone": 1}, "cat": "ok"}];
+const GENERATED = "__GENERATED__";
+const CATNAME = {rescrape:"re-scrape", inject:"inject", minor:"minor", ok:"complete"};
+const N = n => n.toLocaleString();
+const tip = document.getElementById("tip");
+
+// -- headline numbers, summed from the data itself -------------------------
+const totRef = DATA.reduce((a,r) => a + r.ref, 0);
+const totMiss = DATA.reduce((a,r) => a + r.missing, 0);
+const totExtra = DATA.reduce((a,r) => a + r.extra, 0);
+const totShared = DATA.reduce((a,r) => a + r.shared, 0);
+document.getElementById("s-handles").textContent = DATA.length;
+document.getElementById("s-ref").textContent = N(totRef);
+document.getElementById("s-missing").textContent = N(totMiss);
+document.getElementById("s-extra").textContent = "+" + N(totExtra);
+document.getElementById("s-recall").textContent = (100*totShared/totRef).toFixed(1) + "%";
+document.getElementById("stamp").textContent =
+  new Date(GENERATED).toLocaleString(undefined, {dateStyle:"long", timeStyle:"short"});
+
+const bucket = c => DATA.filter(r => r.cat === c).reduce((a,r) => a + r.missing, 0);
+document.getElementById("tot-rescrape").textContent = N(bucket("rescrape"));
+document.getElementById("tot-inject").textContent = N(bucket("inject"));
+document.getElementById("tot-minor").textContent = N(bucket("minor") + bucket("ok"));
+const segers = DATA.find(r => r.handle === "Gertjansegers");
+if (segers) document.getElementById("segers-hole").textContent = N(segers.missing);
+
+function tipFor(r) {
+  const yrs = Object.entries(r.miss_years).map(([y,n]) => y + ": " + n).join("  ") || "—";
+  const kind = Object.entries(r.miss_kind).map(([k,n]) => k + " " + n).join("  ") || "—";
+  return r.handle + "  (" + CATNAME[r.cat] + ")\nref " + N(r.ref) + " · corpus " + N(r.corpus) +
+    "\nmissing " + N(r.missing) + " · added " + N(r.extra) +
+    "\nmissing by year: " + yrs + "\nkind: " + kind;
+}
+function attachTip(el, r) {
+  el.addEventListener("mousemove", e => {
+    tip.style.display = "block";
+    tip.textContent = tipFor(r);
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 320) + "px";
+    tip.style.top = (e.clientY - 10) + "px";
+  });
+  el.addEventListener("mouseleave", () => tip.style.display = "none");
+}
+
+// -- diverging chart: missing to the left, added to the right --------------
+const dchart = document.getElementById("dchart");
+const scale = Math.max(...DATA.map(r => Math.max(r.missing, r.extra)));
+[...DATA].sort((a,b) => (a.extra - a.missing) - (b.extra - b.missing)).forEach(r => {
+  const row = document.createElement("div"); row.className = "drow";
+  const lw = 100 * r.missing / scale, rw = 100 * r.extra / scale;
+  row.innerHTML = '<div class="name"><b>' + r.handle + '</b> · ' + r.party + '</div>' +
+    '<div class="dtrack">' +
+      '<div class="dhalf l">' + (r.missing ? '<span class="dnum">−' + N(r.missing) + '</span>' : '') +
+        '<div class="dbar" style="width:' + lw + '%;background:var(--c-' + r.cat + ')"></div></div>' +
+      '<div class="dhalf r"><div class="dbar" style="width:' + rw + '%"></div>' +
+        (r.extra ? '<span class="dnum">+' + N(r.extra) + '</span>' : '') + '</div>' +
+    '</div>';
+  attachTip(row, r);
+  dchart.appendChild(row);
+});
+
+// -- recall chart ----------------------------------------------------------
+const chart = document.getElementById("chart");
+DATA.forEach(r => {
+  const row = document.createElement("div"); row.className = "row";
+  row.innerHTML = '<div class="name"><b>' + r.handle + '</b> · ' + r.party + '</div>' +
+    '<div class="track"><div class="fill" style="width:' + r.recall + '%;background:var(--c-' + r.cat + ')"></div></div>' +
+    '<div class="val mono">' + r.recall.toFixed(1) + '% · −' + N(r.missing) + '</div>';
+  attachTip(row, r);
+  chart.appendChild(row);
+});
+
+// -- tables ----------------------------------------------------------------
+function fillTable(id, rows, withCat) {
+  document.getElementById(id).innerHTML =
+    "<tr><th>Handle</th><th>Party</th>" + (withCat ? "<th>Status</th>" : "") +
+    "<th class=num>Reference</th><th class=num>Corpus</th><th class=num>Missing</th>" +
+    "<th class=num>Added</th><th class=num>Recall</th><th>Missing by year</th></tr>" +
+    rows.map(r => "<tr><td><b>" + r.handle + "</b></td><td>" + r.party + "</td>" +
+      (withCat ? '<td><span class="chip ' + r.cat + '">' + CATNAME[r.cat] + "</span></td>" : "") +
+      '<td class="num mono">' + N(r.ref) + '</td><td class="num mono">' + N(r.corpus) +
+      '</td><td class="num mono">' + N(r.missing) +
+      '</td><td class="num mono gain">' + (r.extra ? "+" + N(r.extra) : "—") +
+      '</td><td class="num mono">' + r.recall.toFixed(1) +
+      "%</td><td class=mono style='font-size:.72rem'>" +
+      (Object.entries(r.miss_years).map(([y,n]) => y + ":" + n).join(" ") || "—") + "</td></tr>").join("");
+}
+fillTable("t-rescrape", DATA.filter(r => r.cat === "rescrape"), false);
+fillTable("t-inject", DATA.filter(r => r.cat === "inject"), false);
+fillTable("t-minor", [...DATA].filter(r => ["minor","ok"].includes(r.cat) && r.missing > 0)
+                              .sort((a,b) => b.missing - a.missing), false);
+fillTable("t-extra", [...DATA].filter(r => r.extra > 0).sort((a,b) => b.extra - a.extra), true);
+fillTable("t-all", DATA, true);
+</script>
