@@ -32,7 +32,7 @@ bash setup.sh                       # venv + twscrape
 Secrets are **not** in git: copy `secrets/accounts.json` (X cookies) to the container
 separately, and — for notifications — create `secrets/teams.json` (Teams webhook, see
 `secrets/teams.example.json`) and/or `secrets/smtp.json` (see `secrets/smtp.example.json`).
-Existing scraped data is migrated once by rsync-ing `data/corpus/` over; the per-target
+Existing scraped data is migrated once by rsync-ing `data/dataset/` over; the per-target
 checkpoints then make every later run skip finished months (see the repo README).
 
 ## Schedule
@@ -61,7 +61,7 @@ channel when a webhook request is received"**, copy the resulting HTTPS URL into
 
 ## Backup
 
-`backup.timer` mirrors `data/corpus/` nightly (04:30 ± 30m) to SURFdrive — the
+`backup.timer` mirrors `data/dataset/` nightly (04:30 ± 30m) to SURFdrive — the
 university's research cloud — over WebDAV, via `deploy/backup.sh` and an rclone
 remote named `surfdrive`. Overwritten/deleted files are moved to a dated
 `populism-backup/archive/<date>/` folder first, so a bad sync can never destroy
@@ -87,7 +87,7 @@ SURFdrive; cover those with a Proxmox vzdump of the container instead.
 systemctl list-timers scrape.timer        # when it next runs
 journalctl -u scrape.service -e           # last run's output
 systemctl start scrape.service            # run now (respects the daily cap)
-tail -f data/corpus/scrape_*.log          # live scrape progress
+tail -f data/dataset/scrape_*.log          # live scrape progress
 ```
 
-The daily cap is tracked in `data/corpus/.quota.json` (resets each calendar day).
+The daily cap is tracked in `data/dataset/.quota.json` (resets each calendar day).

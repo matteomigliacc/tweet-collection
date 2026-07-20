@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the SURFdrive corpus backup nightly
+Description=Run the SURFdrive dataset backup nightly
 
 [Timer]
 OnCalendar=*-*-* 04:30

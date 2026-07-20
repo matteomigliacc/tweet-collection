@@ -1,5 +1,5 @@
 [Unit]
-Description=Nightly corpus backup to SURFdrive (rclone WebDAV)
+Description=Nightly dataset backup to SURFdrive (rclone WebDAV)
 After=network-online.target
 Wants=network-online.target
 

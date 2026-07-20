@@ -23,7 +23,7 @@ from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from compare_corpus import CEILING, FLOOR, OURS, load, merge, prof_files
+from compare_dataset import CEILING, FLOOR, OURS, load, merge, prof_files
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Nightly corpus backup to SURFdrive over WebDAV (rclone remote "surfdrive").
+# Nightly dataset backup to SURFdrive over WebDAV (rclone remote "surfdrive").
 #
-# Mirrors data/corpus/ to populism-backup/corpus/ on SURFdrive. Files that a
+# Mirrors data/dataset/ to populism-backup/dataset/ on SURFdrive. Files that a
 # sync would overwrite or delete are moved into a dated archive/ folder first,
 # so no backup run can ever destroy the previous good copy.
 # Notifications (src/notify.py): success -> a quiet Teams card only;
@@ -19,12 +19,12 @@ cd "$(dirname "$0")/.."
 DEST="surfdrive:populism-backup"
 LOG=/tmp/backup_rclone.log
 
-if rclone sync data/corpus "$DEST/corpus" \
+if rclone sync data/dataset "$DEST/dataset" \
       --backup-dir "$DEST/archive/$(date +%F)" \
       --exclude ".quota.json" --exclude "*.sqlite-journal" \
       --transfers 4 --retries 3 --timeout 5m \
       --log-level NOTICE --log-file "$LOG"; then
-  SIZE=$(rclone size "$DEST/corpus" | tr '\n' ' ')
+  SIZE=$(rclone size "$DEST/dataset" | tr '\n' ' ')
   echo "backup ok: $SIZE"
   .venv/bin/python - "$SIZE" <<'PY'
 import sys

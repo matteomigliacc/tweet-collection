@@ -1,4 +1,4 @@
-"""Automatic batch scraper for the whole corpus.
+"""Automatic batch scraper for the whole dataset.
 
 Reads frame/leaders.csv (party leaders + their tenure dates) and frame/parties.csv
 (party accounts), computes each target's date window, and scrapes each into its own
@@ -19,7 +19,7 @@ its full window is skipped, and an interrupted target resumes where it stopped.
 
 Usage:
   python src/run_all.py --dry-run          # list every job and its window, scrape nothing
-  python src/run_all.py                     # run the whole corpus (skips completed targets)
+  python src/run_all.py                     # run the whole dataset (skips completed targets)
   python src/run_all.py --party CDA         # only targets in one party folder
   python src/run_all.py --handle Robjetten  # only one handle
 """
@@ -37,10 +37,11 @@ from loguru import logger
 
 from collect import run_collection, month_chunks
 from flatten import export_ndjson
+import errmon
 import notify
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "data" / "corpus"     # scraped output: party-named subfolders under data/corpus/<party>/
+OUT = ROOT / "data" / "dataset"     # scraped output: party-named subfolders under data/dataset/<party>/
 LEADERS = ROOT / "frame" / "leaders.csv"   # committed sampling-frame inputs
 PARTIES = ROOT / "frame" / "parties.csv"
 FLOOR = date(2017, 3, 23)      # 2017 Tweede Kamer installation: the study window starts here
@@ -277,8 +278,13 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
 
 def build_session_card(records: list[dict], done: int, partial: int, failed: int,
                        skipped: int, total: int, done_today: int,
-                       session_secs: float) -> dict:
-    """Compose an Adaptive Card (Teams) mirroring the session-summary email."""
+                       session_secs: float, monitor=None) -> dict:
+    """Compose an Adaptive Card (Teams) mirroring the session-summary email.
+
+    `monitor` is the run's `errmon.ErrorMonitor`. Without it the card can only
+    report `failed`, which counts Python exceptions — a run that lost thousands
+    of tweets to backend errors still shows "0 failed".
+    """
     total_tweets = sum(r["tweets"] for r in records if r.get("tweets"))
     complete_overall = skipped + done
     dur = _fmt_dur(session_secs)
@@ -317,11 +323,27 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
                     stat(f"{total_tweets:,}", "Tweets"), stat(done, "New datasets"),
                     stat(dur, "Duration"), stat(f"{complete_overall}/{total}", "Complete")]},
                 {"type": "Container", "separator": True, "items": rows},
+                *_error_block(monitor),
                 {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
                  "separator": True,
                  "text": (f"{partial} partial · {failed} failed · {skipped} already "
                           f"complete · {done_today} done today · "
                           f"finished {datetime.now():%Y-%m-%d %H:%M}")}]}
+
+
+def _error_block(monitor) -> list[dict]:
+    """The backend-error banner for the session card — empty when the run was clean."""
+    if monitor is None or not monitor.errors_total:
+        return []
+    lost = monitor.data_loss_total
+    return [{"type": "TextBlock", "separator": True, "wrap": True, "weight": "Bolder",
+             "color": "Attention" if lost else "Warning",
+             "text": (f"🛑 {monitor.errors_total} backend errors — months may have been "
+                      f"checkpointed empty. Verify recall before trusting this run."
+                      if lost else
+                      f"⚠️ {monitor.errors_total} backend errors during this run.")},
+            {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
+             "spacing": "None", "text": monitor.final_summary()}]
 
 
 def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> dict:
@@ -349,19 +371,28 @@ def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> 
 
 async def run_batch(jobs: list[dict], limit: int | None = None,
                     daily_limit: int | None = None,
-                    notify_each: bool = False) -> int:
+                    notify_each: bool = False,
+                    error_report_min: float = 10.0) -> int:
     """Non-interactive: scrape incomplete targets once, isolating failures.
 
     Built for cron/systemd. `limit` caps targets processed this run; `daily_limit`
     caps targets processed per calendar day across all runs (persisted in
-    data/corpus/.quota.json) so a timer firing N times still won't exceed it.
+    data/dataset/.quota.json) so a timer firing N times still won't exceed it.
     Sends ONE summary email per run (if any account was processed).
     Returns exit code 0 if nothing failed, 1 if any target errored.
+
+    Every `error_report_min` minutes an `errmon.ErrorMonitor` posts a Teams card
+    if X's backend threw any errors in that window — those queries return zero
+    tweets without raising, so nothing else in this function would notice. Set to
+    0 to disable.
     """
     done = skipped = partial = failed = 0
     records: list[dict] = []
     total = len(jobs)
     session_start = time.monotonic()
+    monitor = errmon.ErrorMonitor(window_minutes=error_report_min) if error_report_min else None
+    if monitor:
+        monitor.start()
     for i, job in enumerate(jobs, 1):
         db, _ = job_paths(job)
         tag = f"{job['party']}/{job['handle']}"
@@ -375,6 +406,8 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             print(f"\n[quota] daily cap of {daily_limit} already reached today — stopping.")
             break
         print(f"\n===== [{i}/{total}] {tag} =====")
+        if monitor:
+            monitor.current_target = tag
         _bump_daily_count()   # count the attempt up-front (a crash still consumes a slot)
         rec = {"party": job["party"], "handle": job["handle"],
                "since": job["since"], "until": job["until"], "tweets": None}
@@ -383,6 +416,9 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             rec["tweets"] = await run_one(job)
         except KeyboardInterrupt:
             print("\n  interrupted — progress checkpointed; re-run to resume")
+            if monitor:
+                await monitor.stop()   # flush the partial window before dying
+                print(f"[errors] {monitor.final_summary()}")
             raise
         except Exception as e:  # one bad handle must not abort the whole batch
             failed += 1
@@ -407,12 +443,16 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             notify.send_teams(build_account_card(rec, i, total, skipped + done))
 
     session_secs = time.monotonic() - session_start
+    if monitor:
+        await monitor.stop()
     print(f"\nBatch summary: {len(records)} processed this run — {done} newly complete, "
           f"{partial} partial, {failed} failed; {skipped} already complete "
           f"(of {total} targets, {_daily_count()} done today).")
+    if monitor:
+        print(f"[errors] {monitor.final_summary()}")
     if records:  # one summary notification per run, only when something was processed
         card = build_session_card(records, done, partial, failed,
-                                  skipped, total, _daily_count(), session_secs)
+                                  skipped, total, _daily_count(), session_secs, monitor)
         if not notify.send_teams(card):  # Teams first; email only as fallback
             subject, text, html = build_session_email(records, done, partial, failed,
                                                        skipped, total, _daily_count(), session_secs)
@@ -432,9 +472,29 @@ async def main() -> None:
     ap.add_argument("--notify-each", action="store_true",
                     help="with --all: post a Teams card after every account, not just "
                          "the end-of-session summary")
+    ap.add_argument("--only", metavar="HANDLES",
+                    help="restrict the run to these comma-separated handles, scraped in "
+                         "the order given (cheapest first keeps the account pool's burst "
+                         "capacity for the expensive targets). Unknown handles abort the "
+                         "run rather than silently scraping nothing.")
+    ap.add_argument("--error-report-min", type=float, default=10.0, metavar="MIN",
+                    help="with --all: post a Teams card every MIN minutes if X's backend "
+                         "threw errors in that window (default 10; 0 disables). Those "
+                         "queries return no tweets without raising, so nothing else "
+                         "notices them.")
     args = ap.parse_args()
 
     jobs = build_jobs()
+    if args.only:
+        wanted = [h.lstrip("@").strip().lower() for h in args.only.split(",") if h.strip()]
+        by_handle: dict[str, list[dict]] = {}
+        for j in jobs:
+            by_handle.setdefault(j["handle"].lower(), []).append(j)
+        unknown = [h for h in wanted if h not in by_handle]
+        if unknown:
+            sys.exit(f"--only: no such target(s): {', '.join(unknown)}")
+        # A handle with several tenures keeps all of them, adjacent and in order.
+        jobs = [j for h in wanted for j in by_handle[h]]
     if args.dry_run:
         print_menu(jobs)
         return
@@ -442,7 +502,8 @@ async def main() -> None:
     setup_logging()
     if args.all:
         code = await run_batch(jobs, limit=args.limit, daily_limit=args.daily_limit,
-                               notify_each=args.notify_each)
+                               notify_each=args.notify_each,
+                               error_report_min=args.error_report_min)
         sys.exit(code)
 
     print_menu(jobs)

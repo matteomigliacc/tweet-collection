@@ -78,6 +78,36 @@ def month_chunks(since: date, until: date):
         cur = nxt
 
 
+# One search query returns at most SEARCH_LIMIT tweets. A month that hits the
+# ceiling is silently truncated — X returns the newest N and stops, with no error
+# and nothing in the response to say results were dropped. @cdavandaag tweeted
+# 5,572 times in March 2017 (the general election) and came back with exactly
+# 1,000 under the old limit; @lientje1967's March 2021 lost 280 the same way.
+# Re-scraping cannot fix it: every run returns the same first N. Hence a ceiling
+# far above any real month.
+SEARCH_LIMIT = 20000
+
+
+async def search_window(api, con, handle, uid, start: date, end: date,
+                        raw: bool) -> tuple[int, int]:
+    """Run one `from:handle since:.. until:..` query over [start, end).
+
+    Returns (newly stored, raw tweets seen).
+    """
+    q = f"from:{handle} since:{start.isoformat()} until:{end.isoformat()}"
+    new = seen = 0
+    if raw:
+        async for rep in api.search_raw(q, limit=SEARCH_LIMIT):
+            for obj in extract_raw_tweets(rep):
+                seen += 1
+                new += store_raw(con, obj, handle, "search")
+    else:
+        async for tw in api.search(q, limit=SEARCH_LIMIT):
+            seen += 1
+            new += store(con, tw, handle, uid, "search")
+    return new, seen
+
+
 def load_checkpoint(con: sqlite3.Connection, handle: str) -> dict:
     row = con.execute(
         "SELECT recent_done, replies_done, months_done FROM checkpoint WHERE handle = ?",
@@ -231,20 +261,12 @@ async def collect_handle(api, con, row, since, until, recent_limit,
         tag = start.strftime("%Y-%m")
         if tag in cp["months_done"]:
             continue
-        q = f"from:{handle} since:{start.isoformat()} until:{end.isoformat()}"
         if verbose:
             idx = all_months.index(tag) + 1
             print(f"  [B] @{handle} {tag} ({idx}/{len(all_months)}) "
                   f"[{datetime.now():%H:%M:%S}] querying ...", flush=True)
-        n = 0
         t0 = time.perf_counter()
-        if raw:
-            async for rep in api.search_raw(q, limit=1000):
-                for obj in extract_raw_tweets(rep):
-                    n += store_raw(con, obj, handle, "search")
-        else:
-            async for tw in api.search(q, limit=1000):
-                n += store(con, tw, handle, uid, "search")
+        n, _ = await search_window(api, con, handle, uid, start, end, raw)
         con.commit()
         cp["months_done"].append(tag)
         save_checkpoint(con, handle, uid, cp["recent_done"], cp["months_done"], "ok",

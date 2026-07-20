@@ -59,7 +59,7 @@ def _flatten_raw(handle: str, collection_pass: str, d: dict) -> dict:
 
 
 def flatten_row(handle: str, collection_pass: str, d: dict) -> dict:
-    if "legacy" in d:  # raw GraphQL object (raw-mode / corpus format)
+    if "legacy" in d:  # raw GraphQL object (raw-mode / dataset format)
         return _flatten_raw(handle, collection_pass, d)
     users = d.get("mentionedUsers") or []
     return {

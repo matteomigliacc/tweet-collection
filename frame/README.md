@@ -1,7 +1,7 @@
 # Sampling frame
 
 The input lists that define **who** gets scraped. Edit these CSVs to change the
-corpus — the scrapers read them directly. (Scraped *output* lands in the
+dataset — the scrapers read them directly. (Scraped *output* lands in the
 git-ignored `data/` folder; keep inputs and outputs separate.)
 
 ## `leaders.csv` — party leaders, by tenure
@@ -13,7 +13,7 @@ one row per spell, so their tweets are windowed to each tenure separately.
 |--------|---------|
 | `handle` | X handle, without `@`. |
 | `name` | Display name (documentation only). |
-| `party` | Party label; also the output subfolder name under `data/corpus/<party>/`. |
+| `party` | Party label; also the output subfolder name under `data/dataset/<party>/`. |
 | `leader_start` | Tenure start, `YYYY-MM-DD`. |
 | `leader_end` | Tenure end, `YYYY-MM-DD`, or `ongoing` for still-serving. |
 | `notes` | Free text — provenance / justification for the dates. |
@@ -32,7 +32,7 @@ one row per spell — both scraped into the same account file, skipping the gap.
 |--------|---------|
 | `handle` | X handle, without `@`. |
 | `name` | Display name. |
-| `party` | Party label; also the output subfolder under `data/corpus/<party>/`. |
+| `party` | Party label; also the output subfolder under `data/dataset/<party>/`. |
 | `seat_start` | First day of the spell, `YYYY-MM-DD` (Kamer-installation date, or a mid-term gain). |
 | `seat_end` | Last day of the spell, `YYYY-MM-DD`, or `ongoing` for currently seated. |
 | `notes` | Free text — seat counts / provenance. Avoid commas (unquoted CSV). |
@@ -44,4 +44,4 @@ it, and treats `ongoing` as today.
 
 A plain handle list used by the standalone `collect.py --csv` path (and its
 default). Columns: `handle,name,party,country`. Handy for ad-hoc runs outside the
-leader/party corpus.
+leader/party dataset.

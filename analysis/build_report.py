@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Rebuild the corpus-vs-professors report page from fresh comparison output.
+"""Rebuild the dataset-vs-professors report page from fresh comparison output.
 
-    rsync ... root@192.168.1.106:/opt/populism-scraping/data/corpus/ data/corpus_server/
-    python3 analysis/compare_corpus.py > analysis/corpus_recall.json
+    rsync ... root@192.168.1.106:/opt/populism-scraping/data/dataset/ data/dataset_server/
+    python3 analysis/compare_dataset.py > analysis/dataset_recall.json
     python3 analysis/build_report.py <template.html> [out.html]
 
 The template carries the whole design; this only swaps the two generated lines
@@ -16,9 +16,9 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RECALL = os.path.join(ROOT, "analysis", "corpus_recall.json")
+RECALL = os.path.join(ROOT, "analysis", "dataset_recall.json")
 
-KEEP = ("handle", "party", "corpus", "ref", "shared", "missing", "extra",
+KEEP = ("handle", "party", "dataset", "ref", "shared", "missing", "extra",
         "recall", "miss_years", "miss_kind", "cat")
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload corpus NDJSON files to 4CAT (https://4cat.cdh.uu.nl) as import datasets.
+"""Upload dataset NDJSON files to 4CAT (https://4cat.cdh.uu.nl) as import datasets.
 
 Replaces the manual Zeeschuimer -> filter-by-date -> merge workflow from the
 professors' onboarding doc: our per-handle ndjsons are already merged,
@@ -14,7 +14,7 @@ Usage:
   python src/upload_4cat.py --dry-run              # list what would upload
   python src/upload_4cat.py --handle Nvanvroonhoven
   python src/upload_4cat.py                        # upload everything
-  python src/upload_4cat.py --corpus data/corpus   # explicit corpus root
+  python src/upload_4cat.py --dataset data/dataset   # explicit dataset root
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ TWEET_FMT = "%a %b %d %H:%M:%S %z %Y"
 def load_windows() -> dict:
     """(party, handle_lower) -> [(start, end)], clipped to FLOOR..CEILING.
 
-    Keyed by party too because e.g. JesseKlaver has separate corpus files
+    Keyed by party too because e.g. JesseKlaver has separate dataset files
     (and tenure windows) under GroenLinks, GroenLinks-PvdA and PRO.
     """
     windows: dict = {}
@@ -160,8 +160,8 @@ def upload_one(cfg: dict, nd: Path, label: str, windows: list) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--corpus", default=str(ROOT / "data" / "corpus_server"),
-                    help="corpus root with <Party>/<handle>.ndjson files")
+    ap.add_argument("--dataset", default=str(ROOT / "data" / "dataset_server"),
+                    help="dataset root with <Party>/<handle>.ndjson files")
     ap.add_argument("--handle", action="append", default=None,
                     help="only upload these handles (repeatable)")
     ap.add_argument("--dry-run", action="store_true")
@@ -170,22 +170,22 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = json.loads(SECRETS.read_text())
-    corpus = Path(args.corpus)
-    if not args.no_sync and corpus == ROOT / "data" / "corpus_server":
-        print("syncing corpus from server ...", flush=True)
+    dataset = Path(args.dataset)
+    if not args.no_sync and dataset == ROOT / "data" / "dataset_server":
+        print("syncing dataset from server ...", flush=True)
         subprocess.run(
             ["rsync", "-rtz", "-e", "ssh -i " + str(Path.home() / ".ssh" / "id_ed25519_scraper"),
              "--include=*/", "--include=*.ndjson", "--exclude=*",
-             "root@192.168.1.106:/opt/populism-scraping/data/corpus/", str(corpus) + "/"],
+             "root@192.168.1.106:/opt/populism-scraping/data/dataset/", str(dataset) + "/"],
             check=True)
-    files = sorted(corpus.glob("*/*.ndjson"))
+    files = sorted(dataset.glob("*/*.ndjson"))
     if args.handle:
         want = {h.lower() for h in args.handle}
         files = [f for f in files if f.stem.lower() in want]
     if not files:
-        sys.exit(f"no ndjson files found under {corpus}")
+        sys.exit(f"no ndjson files found under {dataset}")
 
-    print(f"{len(files)} file(s) from {corpus}:")
+    print(f"{len(files)} file(s) from {dataset}:")
     for f in files:
         print(f"  {f.parent.name}/{f.name}  ({f.stat().st_size/1e6:.1f} MB)")
     if args.dry_run:

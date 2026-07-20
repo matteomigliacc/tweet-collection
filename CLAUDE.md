@@ -7,18 +7,18 @@ collects Dutch party leaders' and party accounts' tweets via twscrape for
 downstream populism analysis. `README.md` documents the pipeline; `deploy/README.md`
 documents the production deployment; `docs/` has the design spec.
 
-**Corpus rules** (`src/run_all.py`): study window 2017-03-23 (TK installation) →
+**Dataset rules** (`src/run_all.py`): study window 2017-03-23 (TK installation) →
 2025-11-12 (TK election, `CEILING`); leaders scraped only for their tenure
 (`frame/leaders.csv`, `ongoing` → ceiling); party accounts per `frame/parties.csv`
 seat windows.
-Output is one `data/corpus/<Party>/<handle>.{sqlite,ndjson}` pair per target
+Output is one `data/dataset/<Party>/<handle>.{sqlite,ndjson}` pair per target
 (git-ignored). Raw GraphQL tweet JSON, `tweet_id` PK, `INSERT OR IGNORE` — re-runs
 are idempotent and can only add tweets.
 
 # Production runs on the home server, not this Mac
 
-The authoritative, always-on scraper is a Proxmox LXC — the local `data/corpus/` is
-a historical snapshot; `data/corpus_server/` is an rsync mirror of the server's.
+The authoritative, always-on scraper is a Proxmox LXC — the local `data/dataset/` is
+a historical snapshot; `data/dataset_server/` is an rsync mirror of the server's.
 
 | | |
 |---|---|
@@ -26,9 +26,9 @@ a historical snapshot; `data/corpus_server/` is an rsync mirror of the server's.
 | Address | `192.168.1.106` — `ssh -i ~/.ssh/id_ed25519_scraper root@192.168.1.106` |
 | Install | `/opt/populism-scraping` (venv at `.venv/`) |
 | Schedule | `scrape.timer` 5×/day (01/06/11/16/21h +0–2h jitter) → `run_all.py --all --limit 3 --daily-limit 15` |
-| Daily quota | `data/corpus/.quota.json` (15/day, resets per calendar day) |
+| Daily quota | `data/dataset/.quota.json` (15/day, resets per calendar day) |
 | Notify | Teams Adaptive Card via Workflows webhook (`secrets/teams.json`); email fallback (`secrets/smtp.json`) |
-| Logs | `journalctl -u scrape.service -e`; `data/corpus/scrape_*.log` |
+| Logs | `journalctl -u scrape.service -e`; `data/dataset/scrape_*.log` |
 
 Server specifics:
 - **Never loop over usernames/passwords/keys when connecting** — a single clean
@@ -37,9 +37,9 @@ Server specifics:
   `sqlite3` module.
 - twscrape CLI must be pointed at the pool explicitly (`--db data/accounts.db`);
   bare `twscrape accounts` creates a stray empty `./accounts.db` (delete it).
-- macOS rsync is openrsync (protocol 29): no `--info` flags. Pull the corpus with
+- macOS rsync is openrsync (protocol 29): no `--info` flags. Pull the dataset with
   `rsync -rtz -e "ssh -i ~/.ssh/id_ed25519_scraper" --include='*/'
-  --include='*.ndjson' --exclude='*' root@192.168.1.106:/opt/populism-scraping/data/corpus/ data/corpus_server/`
+  --include='*.ndjson' --exclude='*' root@192.168.1.106:/opt/populism-scraping/data/dataset/ data/dataset_server/`
 - Deploy code changes by rsync-ing the changed `src/` files over, units to
   `/etc/systemd/system/` + `systemctl daemon-reload && systemctl restart scrape.timer`.
 

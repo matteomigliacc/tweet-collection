@@ -44,11 +44,11 @@ idempotent (`INSERT OR IGNORE`) and a per-handle checkpoint lets an interrupted 
 | `src/load_accounts.py` | Load X accounts (via browser cookies) into twscrape's pool and verify them. |
 | `src/collect.py` | Two-pass collector (the core engine). Also runnable as a CLI. |
 | `src/scrape.py` | Interactive single-handle front-end (answer prompts, no flags). |
-| `src/run_all.py` | Batch runner over the whole corpus from `leaders.csv` + `parties.csv`. |
+| `src/run_all.py` | Batch runner over the whole dataset from `leaders.csv` + `parties.csv`. |
 | `src/flatten.py` | Flatten raw tweet JSON into a tidy CSV (or export raw `.ndjson`). |
 | `frame/` | **Sampling-frame inputs** (committed): `leaders.csv`, `parties.csv`, `politicians.csv`. |
 | `secrets/` | X account cookies — **git-ignored**, never committed. |
-| `data/` | Scraped output — SQLite stores, corpus, CSV/ndjson exports, logs — **git-ignored**. |
+| `data/` | Scraped output — SQLite stores, dataset, CSV/ndjson exports, logs — **git-ignored**. |
 | `docs/` | Design spec / notes. |
 
 ## Setup
@@ -96,7 +96,7 @@ python src/load_accounts.py
 python src/scrape.py
 ```
 
-**Batch over the whole corpus** (reads `frame/leaders.csv` + `frame/parties.csv`):
+**Batch over the whole dataset** (reads `frame/leaders.csv` + `frame/parties.csv`):
 
 ```bash
 python src/run_all.py --dry-run   # list every target + its date window, scrape nothing
@@ -110,7 +110,7 @@ python src/collect.py --csv frame/politicians.csv --since 2017-01-01 --until 202
 python src/flatten.py --db data/tweets.sqlite --out data/tweets_flat.csv
 ```
 
-### Corpus rules (`run_all.py`)
+### Dataset rules (`run_all.py`)
 
 - **Study floor:** nothing before `2017-01-01`.
 - **Leaders:** their tenure only, clipped to the 2017 floor (`ongoing` → today).
