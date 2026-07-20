@@ -68,6 +68,12 @@ def load_windows() -> dict:
 
 def api(cfg: dict, path: str, data: bytes | None = None,
         headers: dict | None = None, query: dict | None = None) -> dict:
+    """One HTTP call to 4CAT, JSON response decoded. GET when data is None, else POST.
+
+    Uses only the stdlib (urllib) so this script runs anywhere without
+    installing anything. The token goes in the Authentication header —
+    {**a, **b} merges two dicts, with the caller's headers winning.
+    """
     url = f"{cfg['base_url']}{path}"
     if query:
         url += "?" + urllib.parse.urlencode(query)
@@ -128,6 +134,9 @@ def to_zeeschuimer(nd: Path, windows: list) -> bytes:
 
 
 def upload_one(cfg: dict, nd: Path, label: str, windows: list) -> dict:
+    """Upload one ndjson: POST the wrapped tweets, poll until 4CAT finishes
+    processing (up to POLL_TRIES x POLL_SECS), then rename the dataset from
+    the generic import label to '@handle (Party)'."""
     raw = to_zeeschuimer(nd, windows)
     if not raw.strip():
         print(f"  -- {label}: no tweets inside the study window, skipping")

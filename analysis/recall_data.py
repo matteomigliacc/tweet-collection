@@ -44,6 +44,9 @@ def objects(path):
                 obj = json.loads(line)
             except ValueError:
                 continue
+            # The professors' files sometimes nest the tweet one level down
+            # (Zeeschuimer's "data" envelope, or a "tweet"/"result" wrapper);
+            # unwrap until we're holding the object with rest_id itself.
             if "rest_id" not in obj:
                 for key in ("tweet", "data", "result"):
                     if isinstance(obj.get(key), dict) and "rest_id" in obj[key]:
@@ -90,6 +93,15 @@ def windows():
 
 
 def main():
+    """For each handle with a reference file: recall = shared ids / reference ids.
+
+    Steps: (1) index the professors' files and our mirror files by handle;
+    (2) per handle, collect our ids and the reference ids inside the tenure
+    window; (3) whatever the reference has that we lack is 'missing' — split
+    into tweets the handle actually wrote ('own', the real gap) vs other
+    authors' tweets riding along in their exports ('foreign', never ours to
+    hold). Emits one JSON blob on stdout for render_report.py.
+    """
     spells, party = windows()
     notes = []
 

@@ -159,7 +159,12 @@ def print_menu(jobs: list[dict]) -> None:
 
 
 class _Tee:
-    """Duplicate console output to a log file as well."""
+    """Duplicate console output to a log file as well.
+
+    setup_logging() replaces sys.stdout with an instance of this class, so
+    every print() in the whole program transparently writes to both the real
+    console and the session log file. (Named after the Unix `tee` command.)
+    """
     def __init__(self, *streams):
         self.streams = streams
 

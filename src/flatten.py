@@ -59,6 +59,13 @@ def _flatten_raw(handle: str, collection_pass: str, d: dict) -> dict:
 
 
 def flatten_row(handle: str, collection_pass: str, d: dict) -> dict:
+    """Flatten one stored tweet, whichever of the two storage formats it uses.
+
+    Dataset runs store the raw GraphQL object (recognisable by its 'legacy'
+    key); ad-hoc non-raw runs store twscrape's parsed form with different
+    field names (rawContent vs full_text, likeCount vs favorite_count, ...).
+    Both come out as the same tidy row.
+    """
     if "legacy" in d:  # raw GraphQL object (raw-mode / dataset format)
         return _flatten_raw(handle, collection_pass, d)
     users = d.get("mentionedUsers") or []
@@ -95,6 +102,8 @@ def export_ndjson(db_path: Path, out_path: Path) -> int:
     rows = con.execute("SELECT raw_json FROM tweets ORDER BY created_at").fetchall()
     n = 0
     with Path(out_path).open("w", encoding="utf-8") as f:
+        # each fetched row is a 1-element tuple; `for (raw,) in rows` unpacks it.
+        # The JSON is written back verbatim — no re-serialisation, no data loss.
         for (raw,) in rows:
             f.write(raw.rstrip("\n"))
             f.write("\n")

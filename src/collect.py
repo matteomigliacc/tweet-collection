@@ -36,6 +36,14 @@ ACCOUNTS_DB = ROOT / "data" / "accounts.db"
 
 
 def init_db(con: sqlite3.Connection) -> None:
+    """Create the two tables every target database has (safe to call repeatedly).
+
+    `tweets` holds one row per tweet with the FULL raw JSON in raw_json — the
+    other columns (handle, created_at, ...) are just copies pulled out for
+    convenient querying. tweet_id being PRIMARY KEY is what makes INSERT OR
+    IGNORE skip duplicates. `checkpoint` records how far each handle got, so
+    an interrupted run resumes instead of restarting.
+    """
     con.executescript(
         """
         CREATE TABLE IF NOT EXISTS tweets (
@@ -70,9 +78,16 @@ def init_db(con: sqlite3.Connection) -> None:
 
 
 def month_chunks(since: date, until: date):
-    """Yield (start, end) date pairs, one per calendar month, covering [since, until)."""
+    """Yield (start, end) date pairs, one per calendar month, covering [since, until).
+
+    A generator: `yield` hands out one pair at a time as the caller loops.
+    e.g. (2019-03-15, 2019-06-02) -> (03-15,04-01), (04-01,05-01), (05-01,06-02).
+    The first/last months are clipped to the requested window; end dates are
+    exclusive (each chunk runs up to but not including its end).
+    """
     cur = date(since.year, since.month, 1)
     while cur < until:
+        # first day of the next month (December rolls over to January 1st)
         nxt = date(cur.year + 1, 1, 1) if cur.month == 12 else date(cur.year, cur.month + 1, 1)
         yield max(cur, since), min(nxt, until)
         cur = nxt
@@ -109,6 +124,11 @@ async def search_window(api, con, handle, uid, start: date, end: date,
 
 
 def load_checkpoint(con: sqlite3.Connection, handle: str) -> dict:
+    """Read this handle's progress; a fresh handle gets an all-zeros checkpoint.
+
+    months_done comes back from SQLite as a JSON string ('["2019-01", ...]'),
+    so json.loads turns it into a real Python list.
+    """
     row = con.execute(
         "SELECT recent_done, replies_done, months_done FROM checkpoint WHERE handle = ?",
         (handle,)
@@ -121,6 +141,11 @@ def load_checkpoint(con: sqlite3.Connection, handle: str) -> dict:
 
 def save_checkpoint(con, handle, user_id, recent_done, months_done, status,
                     error=None, replies_done=0):
+    """Write this handle's progress (an "upsert": insert, or update if it exists).
+
+    ON CONFLICT(handle) DO UPDATE fires when the handle row already exists;
+    `excluded.<col>` means "the value the INSERT tried to write".
+    """
     con.execute(
         """INSERT INTO checkpoint (handle, user_id, recent_done, replies_done,
                                    months_done, status, error, updated_at)
@@ -137,7 +162,11 @@ def save_checkpoint(con, handle, user_id, recent_done, months_done, status,
 
 
 def store(con, tweet, handle, user_id, source) -> int:
-    """INSERT OR IGNORE one tweet. Returns 1 if newly inserted, 0 if duplicate."""
+    """INSERT OR IGNORE one parsed twscrape Tweet. Returns 1 if new, 0 if duplicate.
+
+    cur.rowcount is how many rows the statement actually inserted — 0 when the
+    tweet_id already existed — which lets callers count only NEW tweets.
+    """
     cur = con.execute(
         """INSERT OR IGNORE INTO tweets
                (tweet_id, handle, user_id, created_at, source, raw_json, collected_at)
@@ -149,7 +178,13 @@ def store(con, tweet, handle, user_id, source) -> int:
 
 
 def _unwrap_result(res):
-    """Return the raw GraphQL Tweet object (with legacy/rest_id), or None."""
+    """Return the raw GraphQL Tweet object (with legacy/rest_id), or None.
+
+    X wraps some tweets one level deeper: a "TweetWithVisibilityResults" (e.g.
+    limited-visibility tweets) holds the real tweet under its "tweet" key.
+    Anything that doesn't end up looking like a tweet (no rest_id/legacy —
+    deleted tweets, ads, "who to follow" modules) is rejected with None.
+    """
     if not isinstance(res, dict):
         return None
     if res.get("__typename") == "TweetWithVisibilityResults":
@@ -166,6 +201,11 @@ def extract_raw_tweets(rep) -> list[dict]:
     content.itemContent.tweet_results.result (and module sub-items), which are
     the exact objects X returns — matching the .ndjson archive format. Nested
     quoted/retweeted sub-tweets are left inside their parent, not emitted twice.
+
+    Two nested helper functions do the work: walk() recursively descends the
+    whole response looking for lists called "entries" (their location varies by
+    endpoint), and from_entry() digs the tweet out of one entry. `out` collects
+    results from both because nested functions can read their enclosing scope.
     """
     out = []
 
@@ -201,6 +241,7 @@ def extract_raw_tweets(rep) -> list[dict]:
 def store_raw(con, obj, handle, source) -> int:
     """INSERT OR IGNORE one raw GraphQL Tweet object. Returns 1 if newly inserted."""
     leg = obj["legacy"]
+    # X's date format: 'Wed Aug 14 09:15:00 +0000 2023' -> a datetime we can sort
     dt = datetime.strptime(leg["created_at"], "%a %b %d %H:%M:%S %z %Y")
     cur = con.execute(
         """INSERT OR IGNORE INTO tweets
@@ -222,6 +263,14 @@ def read_frame(csv_path: Path) -> list[dict]:
 async def collect_handle(api, con, row, since, until, recent_limit,
                          skip_recent=False, skip_replies=False,
                          verbose=False, raw=False) -> None:
+    """Scrape one account: resolve the handle to a user id, then run the passes.
+
+    Order: Pass A (recent timeline, unless skip_recent — dataset runs skip it),
+    Pass B (month-by-month search over [since, until)), Pass C (replies tab,
+    unless skip_replies). Each pass checks the checkpoint first, so on a re-run
+    only unfinished work happens. `raw=True` stores the untouched GraphQL
+    objects (the dataset format); raw=False stores twscrape's parsed form.
+    """
     handle = row["handle"].lstrip("@").strip()
     cp = load_checkpoint(con, handle)
 
