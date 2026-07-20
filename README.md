@@ -88,7 +88,7 @@ Two hard-won findings worth knowing if you build on this:
 | `analysis/` | Stdlib-only validation: recall vs. a reference scrape, rendered as an HTML report. |
 | `frame/` | **Sampling frame** (committed): `leaders.csv`, `parties.csv`, `politicians.csv`. |
 | `deploy/` | systemd units + notes for running unattended on a server (timers, quotas, off-site backup). |
-| `docs/` | `GUIDE.md` code walkthrough; design spec. |
+| `docs/` | `GUIDE.md` code walkthrough. |
 | `secrets/` | Cookies, webhook URLs, API tokens — **git-ignored**, templates provided. |
 | `data/` | Scraped output — **git-ignored**. |
 
