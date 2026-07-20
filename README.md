@@ -132,12 +132,3 @@ throughput. Everything under `secrets/` is git-ignored. For unattended
 operation (systemd timers, daily quotas, notifications, off-site backup) see
 `deploy/README.md`.
 
-## Legal / ethical note
-
-Collecting public political speech for research is permitted under EU research
-law (DSM Directive Art. 3 TDM exception; DSA research provisions). Politicians'
-tweets are still **personal data** under GDPR even when public, so storage,
-retention, and access are governed by the project's Data Management Plan.
-Self-serve scraping also violates X's Terms of Service and risks account
-suspension — a deliberate, documented choice surfaced to the ethics /
-data-management review. See `docs/` for the full design and governance notes.
