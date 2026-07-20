@@ -1,7 +1,14 @@
 # Deploying the scraper on a Proxmox LXC
 
-The scraper runs unattended in a dedicated Debian 13 LXC on the home Proxmox box,
+The scraper ran unattended in a dedicated Debian 13 LXC on the home Proxmox box,
 driven by a systemd timer. This is the reproducible record of that setup.
+
+> **Status (July 2026): scraping is finished** — every target in the frame is
+> complete. `scrape.timer` no longer has work to do (each firing just verifies
+> completeness and re-exports); it can be disabled with
+> `systemctl disable --now scrape.timer` whenever convenient. **`backup.timer`
+> stays enabled**: it still mirrors the dataset to SURFdrive nightly. The
+> container also runs the 4CAT uploads (`src/upload_4cat.py`).
 
 ## Container
 

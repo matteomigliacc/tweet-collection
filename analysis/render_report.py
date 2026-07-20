@@ -5,7 +5,7 @@
     python3 analysis/render_report.py <out.html>
 
 Rows are baked into the HTML, so the page needs no scripting and there is no
-template to keep in sync. Supersedes build_report.py.
+template to keep in sync.
 """
 import html
 import json

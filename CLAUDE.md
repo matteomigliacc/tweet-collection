@@ -4,8 +4,12 @@ use fable subagents when you need more intelligence
 
 Tweet scraper for the Utrecht University "Wendy Project" (populism research):
 collects Dutch party leaders' and party accounts' tweets via twscrape for
-downstream populism analysis. `README.md` documents the pipeline; `deploy/README.md`
-documents the production deployment; `docs/` has the design spec.
+downstream populism analysis. **Scraping is FINISHED (July 2026)** — the full
+dataset was collected on the server and validated; remaining server jobs are
+4CAT uploads (`src/upload_4cat.py`) and the nightly SURFdrive backup.
+`README.md` documents the pipeline; `docs/GUIDE.md` is the script-by-script
+code walkthrough; `deploy/README.md` documents the server deployment; `docs/`
+has the design spec.
 
 **Dataset rules** (`src/run_all.py`): study window 2017-03-23 (TK installation) →
 2025-11-12 (TK election, `CEILING`); leaders scraped only for their tenure
@@ -15,10 +19,12 @@ Output is one `data/dataset/<Party>/<handle>.{sqlite,ndjson}` pair per target
 (git-ignored). Raw GraphQL tweet JSON, `tweet_id` PK, `INSERT OR IGNORE` — re-runs
 are idempotent and can only add tweets.
 
-# Production runs on the home server, not this Mac
+# Production ran on the home server, not this Mac
 
-The authoritative, always-on scraper is a Proxmox LXC — the local `data/dataset/` is
-a historical snapshot; `data/dataset_server/` is an rsync mirror of the server's.
+The authoritative dataset lives on a Proxmox LXC; `data/dataset_server/` is the
+local rsync mirror (the local `data/dataset/` scratch copy was deleted in the
+2026-07 cleanup). The Rutte-archive experiment output lives in
+`experiments/rutte-archive/` (git-ignored), not under `data/`.
 
 | | |
 |---|---|

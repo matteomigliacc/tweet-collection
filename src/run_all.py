@@ -1,27 +1,32 @@
-"""Automatic batch scraper for the whole dataset.
+"""Automatic batch scraper for the whole dataset — the main entry point.
 
 Reads frame/leaders.csv (party leaders + their tenure dates) and frame/parties.csv
-(party accounts), computes each target's date window, and scrapes each into its own
-file under output/<party>/<handle>.{sqlite,csv}.
+(party accounts), computes each target's date window, and scrapes each into its
+own pair of files under data/dataset/<Party>/<handle>.{sqlite,ndjson}. The
+actual scraping is done by collect.py; this script decides WHO gets scraped
+WHEN, and wraps that in logging, quotas, and notifications.
 
-Rules:
-  * Study floor: nothing before 2017-01-01.
-  * Leaders: their tenure only, clipped to the 2017 floor. "ongoing" => today.
-  * Party accounts: only while the party held Tweede Kamer seats -- one
-    seat_start/seat_end spell per CSV row, clipped to the 2017 floor, month-aligned,
-    "ongoing" => today. A party that left and later returned (e.g. 50PLUS) has two
-    rows, both scraped into the one account file (the out-of-parliament gap is skipped).
-  * A handle can appear twice with different parties (e.g. Klaver GroenLinks vs
+Dataset rules (one "target" = one handle within one date window):
+  * Study window: 2017-03-23 (Tweede Kamer installation, FLOOR) to
+    2025-11-12 (TK election, CEILING). Nothing outside it is requested.
+  * Leaders: their tenure only, clipped to the study window. "ongoing" in the
+    CSV means "until the ceiling".
+  * Party accounts: only while the party held Tweede Kamer seats — one
+    seat_start/seat_end spell per CSV row, month-aligned. A party that left and
+    later returned (e.g. 50PLUS) has two rows, both scraped into the one
+    account file (the out-of-parliament gap is skipped).
+  * A handle can appear under two parties (e.g. Klaver: GroenLinks, then
     GroenLinks-PvdA) -> two separate files under the two party folders.
 
-Resumable: each target has its own DB + checkpoint, so a target already covering
-its full window is skipped, and an interrupted target resumes where it stopped.
+Resumable: each target has its own SQLite DB with a checkpoint table, so a
+target already covering its full window is skipped entirely, and an interrupted
+target resumes where it stopped (see collect.py for how checkpoints work).
 
 Usage:
-  python src/run_all.py --dry-run          # list every job and its window, scrape nothing
-  python src/run_all.py                     # run the whole dataset (skips completed targets)
-  python src/run_all.py --party CDA         # only targets in one party folder
-  python src/run_all.py --handle Robjetten  # only one handle
+  python src/run_all.py --dry-run              # list every job + window, scrape nothing
+  python src/run_all.py                        # interactive menu, one target at a time
+  python src/run_all.py --all --limit 3 --daily-limit 15   # what the server timer runs
+  python src/run_all.py --only handle1,handle2 # just these handles, in this order
 """
 import argparse
 import asyncio
@@ -39,6 +44,7 @@ from collect import run_collection, month_chunks
 from flatten import export_ndjson
 import errmon
 import notify
+import reports
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "dataset"     # scraped output: party-named subfolders under data/dataset/<party>/
@@ -49,6 +55,12 @@ CEILING = date(2025, 11, 12)   # 2025 Tweede Kamer election: the study window en
 
 
 def parse_end(s: str) -> date:
+    """Turn an end-date CSV cell into a real date, capped at the study ceiling.
+
+    The frame CSVs write "ongoing" for a leader/party still in place; that
+    means "no end yet", so it becomes today — and min() then clips everything
+    to the 2025-11-12 ceiling, since the study stops there regardless.
+    """
     s = s.strip().lower()
     end = date.today() if s == "ongoing" else datetime.strptime(s, "%Y-%m-%d").date()
     return min(end, CEILING)
@@ -92,6 +104,12 @@ def expected_months(since: date, until: date) -> set[str]:
 
 
 def is_complete(db: Path, handle: str, since: date, until: date) -> bool:
+    """True when this target needs no more scraping.
+
+    Complete means: the replies-tab pass (Pass C) ran, AND every calendar month
+    of the target's window appears in the checkpoint's months_done list. The
+    `<=` on the last line is Python's subset test for sets.
+    """
     if not db.exists():
         return False
     con = sqlite3.connect(db)
@@ -187,188 +205,6 @@ def _bump_daily_count() -> int:
     return n
 
 
-def _fmt_dur(seconds: float) -> str:
-    s = int(round(seconds))
-    h, r = divmod(s, 3600)
-    m, sec = divmod(r, 60)
-    if h:
-        return f"{h}h {m:02d}m {sec:02d}s"
-    if m:
-        return f"{m}m {sec:02d}s"
-    return f"{sec}s"
-
-
-def build_session_email(records: list[dict], done: int, partial: int, failed: int,
-                        skipped: int, total: int, done_today: int,
-                        session_secs: float) -> tuple[str, str, str]:
-    """Compose (subject, plaintext, html) for one batch-run summary email.
-
-    `records`: one dict per account processed this run, with keys party, handle,
-    since, until, tweets (int|None), seconds, status ('complete'|'partial'|'failed')."""
-    total_tweets = sum(r["tweets"] for r in records if r.get("tweets"))
-    complete_overall = skipped + done
-    dur = _fmt_dur(session_secs)
-    subject = (f"[scraper] {done} new · {partial} partial · {failed} failed — "
-               f"{total_tweets:,} tweets in {dur}")
-
-    # ---- plaintext ----
-    lines = ["Populism scraper — session summary",
-             "=" * 40,
-             f"Duration:  {dur}",
-             f"Processed: {len(records)} account(s) this run",
-             f"Result:    {done} newly complete, {partial} partial, {failed} failed",
-             f"Tweets:    {total_tweets:,} collected this session",
-             f"Overall:   {complete_overall}/{total} targets complete ({done_today} done today)",
-             "",
-             f"{'Account':22}{'Party':16}{'Tweets':>8}{'Time':>9}  Status"]
-    for r in records:
-        tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "-"
-        lines.append(f"@{r['handle']:21}{r['party']:16}{tw:>8}{_fmt_dur(r['seconds']):>9}  {r['status']}")
-    text = "\n".join(lines)
-
-    # ---- html ----
-    badge = {"complete": ("#137333", "#e6f4ea"), "partial": ("#a56300", "#fef7e0"),
-             "failed": ("#c5221f", "#fce8e6")}
-    rows = ""
-    for r in records:
-        col, bg = badge.get(r["status"], ("#444", "#eee"))
-        tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "—"
-        td = "padding:9px 12px;border-bottom:1px solid #eee;"
-        rows += (
-            f"<tr>"
-            f"<td style='{td}font-family:ui-monospace,Menlo,monospace'>@{r['handle']}</td>"
-            f"<td style='{td}'>{r['party']}</td>"
-            f"<td style='{td}color:#888;font-size:12px'>{r['since']} → {r['until']}</td>"
-            f"<td style='{td}text-align:right;font-variant-numeric:tabular-nums'>{tw}</td>"
-            f"<td style='{td}text-align:right;color:#888'>{_fmt_dur(r['seconds'])}</td>"
-            f"<td style='{td}'><span style='background:{bg};color:{col};padding:2px 9px;"
-            f"border-radius:11px;font-size:12px;font-weight:600'>{r['status']}</span></td>"
-            f"</tr>")
-
-    def stat(label, value):
-        return (f"<td style='padding:14px 16px;text-align:center'>"
-                f"<div style='font-size:22px;font-weight:700;color:#111'>{value}</div>"
-                f"<div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em'>{label}</div></td>")
-
-    html = f"""\
-<div style="background:#f4f5f7;padding:24px 0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#222">
-  <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
-    <div style="background:#1f2933;color:#fff;padding:18px 22px;font-size:16px;font-weight:600">
-      🐦 Populism scraper &middot; session summary
-    </div>
-    <table style="width:100%;border-collapse:collapse;border-bottom:1px solid #eee">
-      <tr>{stat('Tweets', f'{total_tweets:,}')}{stat('New datasets', done)}{stat('Duration', dur)}{stat('Complete', f'{complete_overall}/{total}')}</tr>
-    </table>
-    <table style="width:100%;border-collapse:collapse;font-size:14px">
-      <thead><tr style="text-align:left;color:#888;font-size:11px;text-transform:uppercase;letter-spacing:.04em">
-        <th style="padding:10px 12px">Account</th><th style="padding:10px 12px">Party</th>
-        <th style="padding:10px 12px">Window</th><th style="padding:10px 12px;text-align:right">Tweets</th>
-        <th style="padding:10px 12px;text-align:right">Time</th><th style="padding:10px 12px">Status</th>
-      </tr></thead>
-      <tbody>{rows}</tbody>
-    </table>
-    <div style="padding:14px 22px;color:#999;font-size:12px;background:#fafafa">
-      {partial} partial · {failed} failed · {skipped} already complete · {done_today} done today ·
-      finished {datetime.now():%Y-%m-%d %H:%M}
-    </div>
-  </div>
-</div>"""
-    return subject, text, html
-
-
-def build_session_card(records: list[dict], done: int, partial: int, failed: int,
-                       skipped: int, total: int, done_today: int,
-                       session_secs: float, monitor=None) -> dict:
-    """Compose an Adaptive Card (Teams) mirroring the session-summary email.
-
-    `monitor` is the run's `errmon.ErrorMonitor`. Without it the card can only
-    report `failed`, which counts Python exceptions — a run that lost thousands
-    of tweets to backend errors still shows "0 failed".
-    """
-    total_tweets = sum(r["tweets"] for r in records if r.get("tweets"))
-    complete_overall = skipped + done
-    dur = _fmt_dur(session_secs)
-
-    def stat(value, label):
-        return {"type": "Column", "width": "stretch", "items": [
-            {"type": "TextBlock", "text": str(value), "size": "ExtraLarge",
-             "weight": "Bolder", "horizontalAlignment": "Center", "spacing": "None"},
-            {"type": "TextBlock", "text": label, "size": "Small", "isSubtle": True,
-             "horizontalAlignment": "Center", "spacing": "None"}]}
-
-    colour = {"complete": "Good", "partial": "Warning", "failed": "Attention"}
-    rows = []
-    for r in records:
-        tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "—"
-        rows.append({"type": "ColumnSet", "spacing": "Small", "columns": [
-            {"type": "Column", "width": "stretch", "items": [
-                {"type": "TextBlock", "spacing": "None", "wrap": True,
-                 "text": f"**@{r['handle']}** · {r['party']}"},
-                {"type": "TextBlock", "spacing": "None", "size": "Small", "isSubtle": True,
-                 "text": f"{r['since']} → {r['until']}"}]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "spacing": "None", "horizontalAlignment": "Right",
-                 "text": f"{tw} tweets · {_fmt_dur(r['seconds'])}"},
-                {"type": "TextBlock", "spacing": "None", "size": "Small", "weight": "Bolder",
-                 "horizontalAlignment": "Right",
-                 "color": colour.get(r["status"], "Default"), "text": r["status"]}]}]})
-
-    return {"type": "AdaptiveCard", "version": "1.4",
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "msteams": {"width": "Full"},
-            "body": [
-                {"type": "TextBlock", "size": "Large", "weight": "Bolder",
-                 "text": "🐦 Populism scraper · session summary"},
-                {"type": "ColumnSet", "columns": [
-                    stat(f"{total_tweets:,}", "Tweets"), stat(done, "New datasets"),
-                    stat(dur, "Duration"), stat(f"{complete_overall}/{total}", "Complete")]},
-                {"type": "Container", "separator": True, "items": rows},
-                *_error_block(monitor),
-                {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
-                 "separator": True,
-                 "text": (f"{partial} partial · {failed} failed · {skipped} already "
-                          f"complete · {done_today} done today · "
-                          f"finished {datetime.now():%Y-%m-%d %H:%M}")}]}
-
-
-def _error_block(monitor) -> list[dict]:
-    """The backend-error banner for the session card — empty when the run was clean."""
-    if monitor is None or not monitor.errors_total:
-        return []
-    lost = monitor.data_loss_total
-    return [{"type": "TextBlock", "separator": True, "wrap": True, "weight": "Bolder",
-             "color": "Attention" if lost else "Warning",
-             "text": (f"🛑 {monitor.errors_total} backend errors — months may have been "
-                      f"checkpointed empty. Verify recall before trusting this run."
-                      if lost else
-                      f"⚠️ {monitor.errors_total} backend errors during this run.")},
-            {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
-             "spacing": "None", "text": monitor.final_summary()}]
-
-
-def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> dict:
-    """Compose a small Adaptive Card for ONE finished account (--notify-each)."""
-    colour = {"complete": "Good", "partial": "Warning", "failed": "Attention"}
-    icon = {"complete": "✅", "partial": "🟡", "failed": "❌"}
-    tw = f"{rec['tweets']:,}" if rec.get("tweets") is not None else "—"
-    return {"type": "AdaptiveCard", "version": "1.4",
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "msteams": {"width": "Full"},
-            "body": [
-                {"type": "TextBlock", "size": "Large", "weight": "Bolder", "wrap": True,
-                 "text": f"{icon.get(rec['status'], '•')} @{rec['handle']} · {rec['party']}"},
-                {"type": "FactSet", "facts": [
-                    {"title": "Status", "value": rec["status"]},
-                    {"title": "Tweets", "value": tw},
-                    {"title": "Window", "value": f"{rec['since']} → {rec['until']}"},
-                    {"title": "Took", "value": _fmt_dur(rec["seconds"])}]},
-                {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
-                 "separator": True,
-                 "color": colour.get(rec["status"], "Default"),
-                 "text": (f"Target {index}/{total} · {done_overall}/{total} complete · "
-                          f"{datetime.now():%H:%M}")}]}
-
-
 async def run_batch(jobs: list[dict], limit: int | None = None,
                     daily_limit: int | None = None,
                     notify_each: bool = False,
@@ -428,7 +264,7 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             rec["status"] = "failed"
             records.append(rec)
             if notify_each:
-                notify.send_teams(build_account_card(rec, i, total, skipped + done))
+                notify.send_teams(reports.build_account_card(rec, i, total, skipped + done))
             continue
         rec["seconds"] = time.monotonic() - t0
         if is_complete(db, job["handle"], job["since"], job["until"]):
@@ -440,7 +276,7 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             print(f"  ~ {tag} made progress but isn't fully covered yet — will resume next run")
         records.append(rec)
         if notify_each:
-            notify.send_teams(build_account_card(rec, i, total, skipped + done))
+            notify.send_teams(reports.build_account_card(rec, i, total, skipped + done))
 
     session_secs = time.monotonic() - session_start
     if monitor:
@@ -451,10 +287,10 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
     if monitor:
         print(f"[errors] {monitor.final_summary()}")
     if records:  # one summary notification per run, only when something was processed
-        card = build_session_card(records, done, partial, failed,
+        card = reports.build_session_card(records, done, partial, failed,
                                   skipped, total, _daily_count(), session_secs, monitor)
         if not notify.send_teams(card):  # Teams first; email only as fallback
-            subject, text, html = build_session_email(records, done, partial, failed,
+            subject, text, html = reports.build_session_email(records, done, partial, failed,
                                                        skipped, total, _daily_count(), session_secs)
             notify.send_email(subject, text, html=html)
     return 1 if failed else 0

@@ -127,6 +127,56 @@ def mark_gone(con, tweet_id: str, handle: str, reason: str) -> None:
                 (tweet_id, handle, reason, datetime.now().isoformat(timespec="seconds")))
 
 
+async def fetch_ids_into_db(api, con, handle: str, uid: str, since: date,
+                            until: date, todo: list[str]) -> dict:
+    """Fetch each id in `todo` from X and store what belongs in this database.
+
+    The shared core of both repair paths (--handle/--all and --worklist).
+    For every id it asks X for the tweet (`tweet_details_raw`); the response
+    carries the whole thread around it, so each returned object is kept only if
+    (a) it was written by `uid` (the thread drags in other authors) and
+    (b) its date falls inside [since, until] (this target's own window).
+
+    Returns counts: got (wanted ids stored), extra (in-window thread-mates
+    stored), absent (ids X no longer returns -> recorded in fetch_gone),
+    outside (dropped as out-of-window).
+    """
+    got = extra = absent = outside = 0
+    for i, tid in enumerate(todo, 1):
+        try:
+            rep = await api.tweet_details_raw(int(tid))
+        except Exception as exc:                      # never let one id kill the run
+            print(f"  [id] {handle} {tid}: error {exc!r}", flush=True)
+            continue
+        objs = extract_raw_tweets(rep) if rep is not None else []
+        if not any(str(o.get("rest_id")) == tid for o in objs):
+            absent += 1
+            mark_gone(con, tid, handle, "not returned")
+        for obj in objs:
+            # A reply drags its whole thread down with it. Keep only this
+            # target's own tweets, and only those inside this target's window —
+            # otherwise a 2024 reply would land in the database that is supposed
+            # to hold one spell of 2017-2021, and the spells stop being separable.
+            if str((obj.get("legacy") or {}).get("user_id_str")) != uid:
+                continue
+            d = obj_date(obj)
+            if d is None or not (since <= d <= until):
+                outside += 1
+                continue
+            n = store_raw(con, obj, handle, "by_id")
+            if str(obj.get("rest_id")) == tid:
+                got += n
+            else:
+                extra += n
+        if i % 25 == 0:   # commit in batches; also acts as a progress heartbeat
+            con.commit()
+            print(f"  [id] {handle} {i}/{len(todo)}: +{got} wanted, "
+                  f"+{extra} thread-mates, {absent} gone", flush=True)
+    con.commit()
+    return {"recovered": got, "thread_mates": extra, "gone": absent,
+            "out_of_window": outside}
+
+
 def held_from_ndjson(path: Path) -> tuple[set[str], str | None]:
     """(ids, dominant author id) straight from an exported ndjson.
 
@@ -212,44 +262,12 @@ async def fetch_target(api, job: dict, raw_dir: str, limit: int | None,
         con.close()
         return res
 
-    got = extra = absent = outside = 0
-    for i, tid in enumerate(todo, 1):
-        try:
-            rep = await api.tweet_details_raw(int(tid))
-        except Exception as exc:                      # never let one id kill the run
-            print(f"  [id] {handle} {tid}: error {exc!r}", flush=True)
-            continue
-        objs = extract_raw_tweets(rep) if rep is not None else []
-        if not any(str(o.get("rest_id")) == tid for o in objs):
-            absent += 1
-            mark_gone(con, tid, handle, "not returned")
-        for obj in objs:
-            # A reply drags its whole thread down with it. Keep only this
-            # target's own tweets, and only those inside this target's window —
-            # otherwise a 2024 reply would land in the database that is supposed
-            # to hold one spell of 2017-2021, and the spells stop being separable.
-            if str((obj.get("legacy") or {}).get("user_id_str")) != uid:
-                continue
-            d = obj_date(obj)
-            if d is None or not (since <= d <= until):
-                outside += 1
-                continue
-            n = store_raw(con, obj, handle, "by_id")
-            if str(obj.get("rest_id")) == tid:
-                got += n
-            else:
-                extra += n
-        if i % 25 == 0:
-            con.commit()
-            print(f"  [id] {handle} {i}/{len(todo)}: +{got} wanted, "
-                  f"+{extra} thread-mates, {absent} gone", flush=True)
-    con.commit()
+    counts = await fetch_ids_into_db(api, con, handle, uid, since, until, todo)
     total = con.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
     con.close()
 
     flatten.export_ndjson(db, ndjson)
-    res.update({"recovered": got, "thread_mates": extra, "gone": absent,
-                "out_of_window": outside, "dataset_total": total})
+    res.update(counts, dataset_total=total)
     return res
 
 
@@ -272,38 +290,11 @@ async def fetch_ids(api, job: dict, todo: list[str]) -> dict:
     have = {str(r[0]) for r in con.execute("SELECT tweet_id FROM tweets")}
     todo = [t for t in todo if t not in have]
 
-    got = extra = absent = outside = 0
-    for i, tid in enumerate(todo, 1):
-        try:
-            rep = await api.tweet_details_raw(int(tid))
-        except Exception as exc:
-            print(f"  [id] {handle} {tid}: error {exc!r}", flush=True)
-            continue
-        objs = extract_raw_tweets(rep) if rep is not None else []
-        if not any(str(o.get("rest_id")) == tid for o in objs):
-            absent += 1
-            mark_gone(con, tid, handle, "not returned")
-        for obj in objs:
-            if str((obj.get("legacy") or {}).get("user_id_str")) != uid:
-                continue
-            d = obj_date(obj)
-            if d is None or not (since <= d <= until):
-                outside += 1
-                continue
-            n = store_raw(con, obj, handle, "by_id")
-            got += n if str(obj.get("rest_id")) == tid else 0
-            extra += 0 if str(obj.get("rest_id")) == tid else n
-        if i % 25 == 0:
-            con.commit()
-            print(f"  [id] {handle} {i}/{len(todo)}: +{got} wanted, "
-                  f"+{extra} thread-mates, {absent} gone", flush=True)
-    con.commit()
+    counts = await fetch_ids_into_db(api, con, handle, uid, since, until, todo)
     total = con.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
     con.close()
     flatten.export_ndjson(db, ndjson)
-    return {"label": label, "to_fetch": len(todo), "recovered": got,
-            "thread_mates": extra, "gone": absent, "out_of_window": outside,
-            "dataset_total": total}
+    return {"label": label, "to_fetch": len(todo), "dataset_total": total, **counts}
 
 
 async def run_worklist(path: str, limit: int | None) -> None:
