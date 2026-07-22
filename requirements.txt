@@ -1,1 +1,4 @@
-twscrape>=0.13
+# 0.19.2 fixes X-Client-Transaction-Id header generation + updates GraphQL
+# operation IDs after X's Jul-2026 frontend change; 0.19.1 returns None for
+# every user_by_login (mislabels live accounts as "not found").
+twscrape>=0.19.2
