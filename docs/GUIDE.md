@@ -19,10 +19,10 @@ Data flows through five stages:
 frame/*.csv          WHO to scrape and WHEN (committed to git)
      │
      ▼
-src/run_all.py       decides the targets and their date windows
+src/collect_dataset.py  decides the targets and their date windows
      │  calls
      ▼
-src/collect.py       actually talks to X, three passes per account
+src/collector.py        actually talks to X, three passes per account
      │  writes
      ▼
 data/dataset/<Party>/<handle>.sqlite     raw tweet JSON, one DB per target
@@ -46,13 +46,14 @@ Two ideas keep everything safe:
 
 ---
 
-## `src/collect.py` — the scraping engine
+## `src/collector.py` — the scraping engine
 
 The heart of the project. For one account it runs up to three passes:
 
 - **Pass A (recent):** `user_tweets` — the account's "Tweets" tab, newest
-  ~3,200 tweets (a hard cap X imposes). Skipped in dataset runs, because
-  Pass B covers the same ground with dates attached.
+  ~3,200 tweets (a hard cap X imposes). This overlaps with Pass B, but can
+  recover otherwise accessible tweets that X's search index omitted. Results
+  outside the target's tenure window are discarded.
 - **Pass B (window):** searches `from:handle since:.. until:..` one calendar
   month at a time. Splitting by month sidesteps the 3,200 cap: each month is
   its own query. `month_chunks()` produces the (start, end) pairs.
@@ -60,7 +61,8 @@ The heart of the project. For one account it runs up to three passes:
   exists because X's *search index* silently omits many replies; Pass B alone
   missed ~20% of reply-heavy accounts. The replies tab also shows the tweets
   being replied *to* (written by other people), so Pass C filters: only objects
-  whose `user_id_str` equals the target's own user id are stored.
+  whose `user_id_str` equals the target's own user id and whose dates fall
+  inside the target window are stored.
 
 Other things to notice:
 
@@ -79,7 +81,7 @@ tweet in api.search(...)` pulls results as they stream in); `sqlite3` from the
 standard library; `yield` in `month_chunks` (a *generator*: the function
 produces values one at a time instead of building a whole list).
 
-## `src/run_all.py` — the batch runner (main entry point)
+## `src/collect_dataset.py` — the dataset runner (main entry point)
 
 Turns the two frame CSVs into a list of "jobs" (one handle + one date window
 each), then scrapes whichever jobs aren't complete yet. Everything dataset-y is
@@ -106,10 +108,10 @@ exception is recorded rather than fatal.
 
 ## `src/reports.py` — notification payloads
 
-No logic, just formatting: takes the numbers `run_all.py` gathered and builds
+No logic, just formatting: takes the numbers `collect_dataset.py` gathered and builds
 the Teams "Adaptive Cards" (JSON structures Microsoft renders as chat
 messages) and the fallback HTML email. Kept separate so the ~200 lines of
-layout don't bury the scraping logic in run_all.py.
+layout don't bury the scraping logic in collect_dataset.py.
 
 ## `src/notify.py` — actually sending things
 
@@ -174,11 +176,11 @@ expects, clipped to the study window, and the dataset is labeled
 (missing `id` field; deleted quoted tweets) — see the comments in
 `to_zeeschuimer()`.
 
-## `src/scrape.py`, `src/collect.py --csv` — ad-hoc scraping
+## `src/scrape_account.py`, `src/collector.py --csv` — ad-hoc scraping
 
-`scrape.py` is a question-and-answer front-end for scraping any single handle
+`scrape_account.py` is a question-and-answer front-end for scraping any single handle
 outside the dataset rules (it just calls `run_collection` like everything
-else). `collect.py` can also run standalone with flags. Neither touches
+else). `collector.py` can also run standalone with flags. Neither touches
 `data/dataset/`.
 
 ## `src/add_accounts.py`, `src/load_accounts.py` — the account pool
@@ -233,7 +235,7 @@ onboarding document; rows carry a `notes` column with provenance.
 ## `deploy/` — the server units
 
 systemd service/timer pairs that ran the show on the Proxmox container
-(CTID 106): `scrape.timer` fired `run_all.py --all --limit 3 --daily-limit 15`
+(CTID 106): `scrape.timer` fired `collect_dataset.py --all --limit 3 --daily-limit 15`
 five times a day; `backup.timer` pushes a nightly corpus backup to SURFdrive
 over WebDAV. See `deploy/README.md`.
 

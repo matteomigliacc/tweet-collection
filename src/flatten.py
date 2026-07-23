@@ -93,17 +93,11 @@ def flatten_row(handle: str, collection_pass: str, d: dict) -> dict:
 
 
 def export_ndjson(db_path: Path, out_path: Path) -> int:
-    """Write every stored raw tweet object to .ndjson (one JSON object per line).
-
-    Use with raw-mode collection, where raw_json holds the raw GraphQL Tweet
-    object — the output matches the archive .ndjson format field-for-field.
-    """
+    """Write every stored raw tweet object to NDJSON."""
     con = sqlite3.connect(str(db_path))
     rows = con.execute("SELECT raw_json FROM tweets ORDER BY created_at").fetchall()
     n = 0
     with Path(out_path).open("w", encoding="utf-8") as f:
-        # each fetched row is a 1-element tuple; `for (raw,) in rows` unpacks it.
-        # The JSON is written back verbatim — no re-serialisation, no data loss.
         for (raw,) in rows:
             f.write(raw.rstrip("\n"))
             f.write("\n")

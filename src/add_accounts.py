@@ -120,7 +120,7 @@ async def main() -> None:
     print(f"\nSaved {len(accounts)} account(s) to {SECRETS.relative_to(ROOT)}")
 
     if ask_yes_no("\nLoad and verify these accounts now?", default=True):
-        import load_accounts as loader  # same folder; reuse its pool loader + smoke test
+        import load_accounts as loader
         await loader.main()
     else:
         print("Later, run:  python src/load_accounts.py")

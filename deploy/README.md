@@ -33,7 +33,7 @@ apt-get install -y python3-venv python3-pip git rsync ca-certificates
 # then, inside it:
 bash setup.sh                       # venv + twscrape
 .venv/bin/python src/load_accounts.py   # build data/accounts.db, verify cookies
-.venv/bin/python src/run_all.py --dry-run   # confirm [✓] on already-scraped targets
+.venv/bin/python src/collect_dataset.py --dry-run   # confirm [✓] on already-scraped targets
 ```
 
 Secrets are **not** in git: copy `secrets/accounts.json` (X cookies) to the container
@@ -53,7 +53,7 @@ systemctl enable --now scrape.timer
 ```
 
 The timer fires 5×/day (01/06/11/16/21h + up to 2h jitter). Each run does
-`run_all.py --all --limit 3 --daily-limit 15`, so the first pass ramps up ~15
+`collect_dataset.py --all --limit 3 --daily-limit 15`, so the first pass ramps up ~15
 accounts/day, account-by-account, over several days; afterwards runs only fetch new
 months. Each run sends one summary notification via `src/notify.py` — an Adaptive
 Card to a Microsoft Teams channel (session scrape time, per-account table, overall

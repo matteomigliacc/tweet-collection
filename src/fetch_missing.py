@@ -1,32 +1,15 @@
-"""Fetch tweets the search index won't return, one at a time, straight from X.
+"""Fetch known missing tweets directly by ID.
 
-Why this exists: X's search index permanently omits many old @-replies. Passes B
-and C cannot reach them — @Gertjansegers was checkpoint-reset and re-scraped from
-scratch in a run with zero backend errors and came back with the same 1,834-tweet
-hole, not one recovered. But the tweets are not gone; they are simply not
-*searchable*. `tweet_details` addresses a tweet by id and returns it fine.
-
-So the professors' reference files stop being a data source and become a worklist:
-every id they hold that our dataset does not gets fetched from X directly. What
-lands in the dataset is the authentic current GraphQL object, not a copy of
-someone else's scrape — which is what makes this preferable to injecting their
-JSON wholesale.
+Some older replies remain available by ID but never appear in X search or the
+limited replies timeline. Reference files supply the worklist; this script
+fetches the current GraphQL object rather than copying reference JSON.
 
     python src/fetch_missing.py --handle Gertjansegers --dry-run
     python src/fetch_missing.py --handle Gertjansegers
     python src/fetch_missing.py --all --limit 500
 
-This works on the same unit as run_all.py: one *target*, meaning a handle within
-one tenure or seat spell, writing to that spell's own database. A handle can be
-several targets — JesseKlaver led GroenLinks, then PRO, then GroenLinks-PvdA, and
-each has its own db under its own party folder. Nothing is ever written outside
-the window that owns it, so the databases stay exactly as separable as the
-scraper leaves them.
-
-Stored with source="by_id", so the dataset can always be split into what search
-found and what had to be fetched. Re-runs are cheap: ids that come back empty are
-recorded in `fetch_gone` and skipped next time, so a deleted tweet is asked for
-once rather than on every run.
+Only tweets by the target author and inside that target's window are added.
+Unavailable IDs are recorded in `fetch_gone` and skipped on later runs.
 
 Reference files live in ~/Raw Data on the Mac; on the scraper box point --raw at
 wherever they were synced.
@@ -44,16 +27,14 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from run_all import build_jobs, job_paths
+from collect_dataset import build_jobs, job_paths
 
-# twscrape (and everything that imports it) is only needed to actually fetch.
-# --emit-worklist runs on the Mac, which holds ~/Raw Data but no scraper venv,
-# so the import is deferred rather than paid at module load.
+# Worklists can be generated on a machine without twscrape installed.
 def _fetching_imports():
     global API, flatten, extract_raw_tweets, store_raw
     from twscrape import API
     import flatten
-    from collect import extract_raw_tweets, store_raw
+    from collector import extract_raw_tweets, store_raw
 
 RAW_DEFAULT = os.path.expanduser("~/Raw Data")
 FMT = "%a %b %d %H:%M:%S %z %Y"

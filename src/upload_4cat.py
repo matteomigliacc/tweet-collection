@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
-"""Upload dataset NDJSON files to 4CAT (https://4cat.cdh.uu.nl) as import datasets.
+"""Filter dataset NDJSON files and import them into 4CAT.
 
-Replaces the manual Zeeschuimer -> filter-by-date -> merge workflow from the
-professors' onboarding doc: our per-handle ndjsons are already merged,
-deduplicated (tweet_id PK) and clipped to the tenure/seat window, so each file
-maps 1:1 onto a finished 4CAT dataset.
-
-Auth: secrets/fourcat.json {"base_url": ..., "api_token": ...}. The token is
-passed as the `access_token` query parameter (4CAT's Zeeschuimer-compatible
-import endpoint); the NDJSON goes in the POST body unchanged.
+Authentication is read from secrets/fourcat.json:
+{"base_url": "...", "api_token": "..."}.
 
 Usage:
   python src/upload_4cat.py --dry-run              # list what would upload
@@ -35,7 +29,7 @@ SECRETS = ROOT / "secrets" / "fourcat.json"
 PLATFORM = "twitter.com"  # Zeeschuimer platform id for X/Twitter
 POLL_SECS = 5
 POLL_TRIES = 60
-FLOOR = date(2017, 3, 23)      # study floor: 2017 Tweede Kamer installation (same as run_all)
+FLOOR = date(2017, 3, 23)      # study floor: 2017 Tweede Kamer installation
 CEILING = date(2025, 11, 12)   # 2025 TK election: study window ends here
 TWEET_FMT = "%a %b %d %H:%M:%S %z %Y"
 
@@ -68,12 +62,7 @@ def load_windows() -> dict:
 
 def api(cfg: dict, path: str, data: bytes | None = None,
         headers: dict | None = None, query: dict | None = None) -> dict:
-    """One HTTP call to 4CAT, JSON response decoded. GET when data is None, else POST.
-
-    Uses only the stdlib (urllib) so this script runs anywhere without
-    installing anything. The token goes in the Authentication header —
-    {**a, **b} merges two dicts, with the caller's headers winning.
-    """
+    """Make one authenticated 4CAT request and decode its JSON response."""
     url = f"{cfg['base_url']}{path}"
     if query:
         url += "?" + urllib.parse.urlencode(query)
@@ -101,8 +90,7 @@ def to_zeeschuimer(nd: Path, windows: list) -> bytes:
         if not line:
             continue
         tweet = json.loads(line)
-        # clip to the study window: the DB keeps whatever any pass encountered
-        # (Replies tab reaches outside the tenure window in both directions)
+        # Older working stores can contain replies outside the final study window.
         ca = tweet.get("legacy", {}).get("created_at")
         if not ca:
             continue

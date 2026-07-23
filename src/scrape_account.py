@@ -2,17 +2,17 @@
 
 Run it and answer the prompts — no flags to remember:
 
-    python src/scrape.py
+    python src/scrape_account.py
 
 It asks for a handle, a date window, and a couple of options, shows a summary
-to confirm, then runs the same collector as collect.py and (optionally) flattens
+to confirm, then runs the same engine as collector.py and optionally flattens
 the result to a tidy CSV.
 """
 import asyncio
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from collect import run_collection
+from collector import run_collection
 from flatten import flatten_db
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,7 +73,7 @@ async def main() -> None:
     until_exclusive = until + timedelta(days=1)
 
     include_recent = ask_yes_no(
-        "Also grab the latest timeline (up to ~3200 newest tweets, ignores start date)?",
+        "Also check the latest timeline (up to ~3200 items, date-filtered)?",
         default=False,
     )
     verbose = ask_yes_no("Verbose progress output?", default=True)

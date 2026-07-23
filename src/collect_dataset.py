@@ -1,10 +1,8 @@
-"""Automatic batch scraper for the whole dataset — the main entry point.
+"""Build and run collection jobs for the research dataset.
 
 Reads frame/leaders.csv (party leaders + their tenure dates) and frame/parties.csv
-(party accounts), computes each target's date window, and scrapes each into its
-own pair of files under data/dataset/<Party>/<handle>.{sqlite,ndjson}. The
-actual scraping is done by collect.py; this script decides WHO gets scraped
-WHEN, and wraps that in logging, quotas, and notifications.
+(party accounts), computes each target's date window, and writes one SQLite/NDJSON
+pair under data/dataset/<Party>/.
 
 Dataset rules (one "target" = one handle within one date window):
   * Study window: 2017-03-23 (Tweede Kamer installation, FLOOR) to
@@ -18,15 +16,11 @@ Dataset rules (one "target" = one handle within one date window):
   * A handle can appear under two parties (e.g. Klaver: GroenLinks, then
     GroenLinks-PvdA) -> two separate files under the two party folders.
 
-Resumable: each target has its own SQLite DB with a checkpoint table, so a
-target already covering its full window is skipped entirely, and an interrupted
-target resumes where it stopped (see collect.py for how checkpoints work).
-
 Usage:
-  python src/run_all.py --dry-run              # list every job + window, scrape nothing
-  python src/run_all.py                        # interactive menu, one target at a time
-  python src/run_all.py --all --limit 3 --daily-limit 15   # what the server timer runs
-  python src/run_all.py --only handle1,handle2 # just these handles, in this order
+  python src/collect_dataset.py --dry-run              # list every job + window, scrape nothing
+  python src/collect_dataset.py                        # interactive, one target at a time
+  python src/collect_dataset.py --all --limit 3 --daily-limit 15
+  python src/collect_dataset.py --only handle1,handle2
 """
 import argparse
 import asyncio
@@ -40,27 +34,22 @@ from pathlib import Path
 
 from loguru import logger
 
-from collect import run_collection, month_chunks
+from collector import run_collection, month_chunks
 from flatten import export_ndjson
 import errmon
 import notify
 import reports
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "data" / "dataset"     # scraped output: party-named subfolders under data/dataset/<party>/
-LEADERS = ROOT / "frame" / "leaders.csv"   # committed sampling-frame inputs
+OUT = ROOT / "data" / "dataset"
+LEADERS = ROOT / "frame" / "leaders.csv"
 PARTIES = ROOT / "frame" / "parties.csv"
 FLOOR = date(2017, 3, 23)      # 2017 Tweede Kamer installation: the study window starts here
 CEILING = date(2025, 11, 12)   # 2025 Tweede Kamer election: the study window ends here
 
 
 def parse_end(s: str) -> date:
-    """Turn an end-date CSV cell into a real date, capped at the study ceiling.
-
-    The frame CSVs write "ongoing" for a leader/party still in place; that
-    means "no end yet", so it becomes today — and min() then clips everything
-    to the 2025-11-12 ceiling, since the study stops there regardless.
-    """
+    """Parse a frame end date and cap it at the study ceiling."""
     s = s.strip().lower()
     end = date.today() if s == "ongoing" else datetime.strptime(s, "%Y-%m-%d").date()
     return min(end, CEILING)
@@ -79,15 +68,15 @@ def build_jobs() -> list[dict]:
         since = max(start, FLOOR)
         until = parse_end(r["leader_end"])
         if since > until:
-            continue  # tenure entirely before the 2017 floor -> nothing to fetch
+            continue
         jobs.append({"handle": r["handle"].lstrip("@").strip(), "party": r["party"],
                      "since": since, "until": until, "kind": "leader"})
     for r in read_csv(PARTIES):
         start = datetime.strptime(r["seat_start"], "%Y-%m-%d").date().replace(day=1)
-        since = max(start, FLOOR)          # month-aligned; nothing before the floor
+        since = max(start, FLOOR)
         until = parse_end(r["seat_end"])
         if since > until:
-            continue  # seat spell entirely before the 2017 floor -> nothing to fetch
+            continue
         jobs.append({"handle": r["handle"].lstrip("@").strip(), "party": r["party"],
                      "since": since, "until": until, "kind": "party"})
     return jobs
@@ -104,32 +93,26 @@ def expected_months(since: date, until: date) -> set[str]:
 
 
 def is_complete(db: Path, handle: str, since: date, until: date) -> bool:
-    """True when this target needs no more scraping.
-
-    Complete means: the replies-tab pass (Pass C) ran, AND every calendar month
-    of the target's window appears in the checkpoint's months_done list. The
-    `<=` on the last line is Python's subset test for sets.
-    """
+    """Return whether all three passes cover the target window."""
     if not db.exists():
         return False
     con = sqlite3.connect(db)
     try:
         row = con.execute(
-            "SELECT months_done, replies_done FROM checkpoint WHERE handle = ?",
+            """SELECT months_done, recent_done, replies_done
+               FROM checkpoint WHERE handle = ?""",
             (handle,)).fetchone()
     except sqlite3.OperationalError:
-        return False  # old schema (no replies_done yet) -> needs a Pass C run
+        return False
     finally:
         con.close()
-    if not row or not row[1]:  # Pass C (replies tab) not done yet
+    if not row or not row[1] or not row[2]:
         return False
     return expected_months(since, until) <= set(json.loads(row[0] or "[]"))
 
 
 async def run_one(job: dict) -> int:
-    """Scrape a single target to its tenure window and export raw ndjson.
-
-    Returns the number of tweets in the exported ndjson."""
+    """Collect one target and export its working store to NDJSON."""
     db, nd_path = job_paths(job)
     handle = job["handle"]
     tag = f"{job['party']}/{handle}"
@@ -142,7 +125,7 @@ async def run_one(job: dict) -> int:
     frame = [{"handle": handle, "name": "", "party": job["party"], "country": "NL"}]
     until_excl = job["until"] + timedelta(days=1)  # include the end date itself
     await run_collection(frame, job["since"], until_excl, db,
-                         skip_recent=True, verbose=True, raw=True)
+                         skip_recent=False, verbose=True, raw=True)
     n = export_ndjson(db, nd_path)
     print(f"\n-> {nd_path.relative_to(ROOT)} ({n} tweets)")
     return n
@@ -159,12 +142,7 @@ def print_menu(jobs: list[dict]) -> None:
 
 
 class _Tee:
-    """Duplicate console output to a log file as well.
-
-    setup_logging() replaces sys.stdout with an instance of this class, so
-    every print() in the whole program transparently writes to both the real
-    console and the session log file. (Named after the Unix `tee` command.)
-    """
+    """Write console output to several streams."""
     def __init__(self, *streams):
         self.streams = streams
 
@@ -183,19 +161,17 @@ def setup_logging() -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     log_path = OUT / f"scrape_{datetime.now():%Y%m%d_%H%M%S}.log"
     fh = open(log_path, "a", encoding="utf-8")
-    # console prints (progress) -> console + file
     sys.stdout = _Tee(sys.__stdout__, fh)
-    # twscrape's own loguru messages (rate limits, warnings) -> same file
     logger.add(str(log_path), level="INFO", enqueue=True)
     print(f"[log] writing this session to {log_path.relative_to(ROOT)}")
     return log_path
 
 
-QUOTA_FILE = OUT / ".quota.json"   # tracks targets processed per calendar day
+QUOTA_FILE = OUT / ".quota.json"
 
 
 def _daily_count() -> int:
-    """Targets already processed *today* (0 if the state file is old/absent)."""
+    """Return how many targets have been attempted today."""
     try:
         d = json.loads(QUOTA_FILE.read_text())
         return int(d.get("count", 0)) if d.get("date") == date.today().isoformat() else 0

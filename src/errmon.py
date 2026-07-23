@@ -1,7 +1,7 @@
 """Watch twscrape's log stream during a run and report backend errors to Teams.
 
 Why this exists: an errored search query returns *zero tweets* rather than
-raising, so `run_all.run_batch` counts the target as "complete" and the month is
+raising, so `collect_dataset.run_batch` counts the target as "complete" and the month is
 checkpointed as done. On 2026-07-19 that silently dropped ~36,500 tweets across
 seven party accounts while the end-of-run card reported "0 failed". The scrape
 log is the only place the damage is visible while it is happening.
@@ -19,7 +19,7 @@ A healthy hour produces 0-4 errors; the hour that ate the data produced 502. Any
 error at all is therefore worth reporting, and `spike_threshold` per window marks
 the point where the run should be considered untrustworthy.
 
-Used by run_all.py; safe to import anywhere. Every failure path is swallowed and
+Used by collect_dataset.py; safe to import anywhere. Every failure path is swallowed and
 logged — a notification problem must never abort scraping.
 """
 import asyncio

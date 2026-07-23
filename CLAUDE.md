@@ -11,7 +11,7 @@ dataset was collected on the server and validated; remaining server jobs are
 code walkthrough; `deploy/README.md` documents the server deployment; `docs/`
 has the design spec.
 
-**Dataset rules** (`src/run_all.py`): study window 2017-03-23 (TK installation) →
+**Dataset rules** (`src/collect_dataset.py`): study window 2017-03-23 (TK installation) →
 2025-11-12 (TK election, `CEILING`); leaders scraped only for their tenure
 (`frame/leaders.csv`, `ongoing` → ceiling); party accounts per `frame/parties.csv`
 seat windows.
@@ -31,7 +31,7 @@ local rsync mirror (the local `data/dataset/` scratch copy was deleted in the
 | Container | CTID 106 `populism-scraper`, Debian 13, unprivileged |
 | Address | `192.168.1.106` — `ssh -i ~/.ssh/id_ed25519_scraper root@192.168.1.106` |
 | Install | `/opt/populism-scraping` (venv at `.venv/`) |
-| Schedule | `scrape.timer` 5×/day (01/06/11/16/21h +0–2h jitter) → `run_all.py --all --limit 3 --daily-limit 15` |
+| Schedule | `scrape.timer` 5×/day (01/06/11/16/21h +0–2h jitter) → `collect_dataset.py --all --limit 3 --daily-limit 15` |
 | Daily quota | `data/dataset/.quota.json` (15/day, resets per calendar day) |
 | Notify | Teams Adaptive Card via Workflows webhook (`secrets/teams.json`); email fallback (`secrets/smtp.json`) |
 | Logs | `journalctl -u scrape.service -e`; `data/dataset/scrape_*.log` |
@@ -55,11 +55,11 @@ Server specifics:
   and some plain tweets** — search-only recall can be as low as ~80% for
   reply-heavy accounts. Pass A (`user_tweets`) reads the "Tweets" tab, which
   **excludes replies**. That's why **Pass C** (`user_tweets_and_replies`, the
-  Replies tab, ~3,200 cap) exists in `collect.py` — it recovered the missing
-  ~20% for HenriBontenbal/mirjambikker. `run_all.py` runs Passes B+C
-  (`skip_recent=True`); a target isn't `is_complete` until `replies_done=1`.
+  Replies tab, ~3,200 cap) exists in `collector.py` — it recovered the missing
+  ~20% for HenriBontenbal/mirjambikker. `collect_dataset.py` runs all three passes; a
+  target isn't `is_complete` until both `recent_done=1` and `replies_done=1`.
 - The replies tab embeds **parent tweets by other authors**, and
-  `extract_raw_tweets()` (src/collect.py) emits *every* tweet in a response —
+  `extract_raw_tweets()` (src/collector.py) emits *every* tweet in a response —
   Pass C therefore filters on `obj["legacy"]["user_id_str"] == uid`; keep that
   filter for any new tab-based pass or foreign tweets pollute the handle's DB.
 - Checkpoints: each target DB has a `checkpoint` table (`months_done` JSON list,

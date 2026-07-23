@@ -1,23 +1,18 @@
-"""Three-pass tweet collector for the politician sampling frame.
+"""Three-pass tweet collection engine.
 
-For each handle in politicians.csv:
+For each handle:
   Pass A (recent):  user_tweets  -> most recent timeline (X caps this ~3200)
   Pass B (window):  search "from:handle since:.. until:.."  chunked per-month,
                     which bypasses the 3200 ceiling for a bounded date range.
   Pass C (replies): user_tweets_and_replies -> the profile's "Replies" tab
-                    (~3200 cap). Essential: X's *search* index silently omits
-                    many replies (and some plain tweets), so Pass B alone can
-                    miss ~20% of a reply-heavy account. The replies tab embeds
-                    parent tweets by OTHER authors, so Pass C keeps only tweets
-                    authored by the target user.
+                    (~3200 cap), filtered to the target author and date window.
 
-Raw tweet JSON is stored in SQLite with tweet_id as PRIMARY KEY, so re-runs are
-idempotent (INSERT OR IGNORE) and a per-handle checkpoint lets an interrupted
-run resume where it stopped rather than restart.
+X search silently omits some replies and ordinary tweets, so the passes overlap.
+Tweet IDs are primary keys and checkpoints make reruns safe.
 
 Usage:
-  python src/collect.py --since 2026-01-01 --until 2026-07-01
-  python src/collect.py --csv frame/politicians.csv --recent-limit 3200
+  python src/collector.py --since 2026-01-01 --until 2026-07-01
+  python src/collector.py --csv frame/politicians.csv --recent-limit 3200
 """
 import argparse
 import asyncio
@@ -36,14 +31,7 @@ ACCOUNTS_DB = ROOT / "data" / "accounts.db"
 
 
 def init_db(con: sqlite3.Connection) -> None:
-    """Create the two tables every target database has (safe to call repeatedly).
-
-    `tweets` holds one row per tweet with the FULL raw JSON in raw_json — the
-    other columns (handle, created_at, ...) are just copies pulled out for
-    convenient querying. tweet_id being PRIMARY KEY is what makes INSERT OR
-    IGNORE skip duplicates. `checkpoint` records how far each handle got, so
-    an interrupted run resumes instead of restarting.
-    """
+    """Create or migrate the tweet and checkpoint tables."""
     con.executescript(
         """
         CREATE TABLE IF NOT EXISTS tweets (
@@ -51,7 +39,7 @@ def init_db(con: sqlite3.Connection) -> None:
             handle       TEXT NOT NULL,
             user_id      INTEGER,
             created_at   TEXT,
-            source       TEXT,          -- 'timeline' | 'search'
+            source       TEXT,          -- first insertion: timeline/search/replies_tab/by_id
             raw_json     TEXT NOT NULL,
             collected_at TEXT NOT NULL
         );
@@ -78,13 +66,7 @@ def init_db(con: sqlite3.Connection) -> None:
 
 
 def month_chunks(since: date, until: date):
-    """Yield (start, end) date pairs, one per calendar month, covering [since, until).
-
-    A generator: `yield` hands out one pair at a time as the caller loops.
-    e.g. (2019-03-15, 2019-06-02) -> (03-15,04-01), (04-01,05-01), (05-01,06-02).
-    The first/last months are clipped to the requested window; end dates are
-    exclusive (each chunk runs up to but not including its end).
-    """
+    """Yield calendar-month chunks covering the half-open interval."""
     cur = date(since.year, since.month, 1)
     while cur < until:
         # first day of the next month (December rolls over to January 1st)
@@ -124,11 +106,7 @@ async def search_window(api, con, handle, uid, start: date, end: date,
 
 
 def load_checkpoint(con: sqlite3.Connection, handle: str) -> dict:
-    """Read this handle's progress; a fresh handle gets an all-zeros checkpoint.
-
-    months_done comes back from SQLite as a JSON string ('["2019-01", ...]'),
-    so json.loads turns it into a real Python list.
-    """
+    """Read a handle's progress, or return a fresh checkpoint."""
     row = con.execute(
         "SELECT recent_done, replies_done, months_done FROM checkpoint WHERE handle = ?",
         (handle,)
@@ -141,11 +119,7 @@ def load_checkpoint(con: sqlite3.Connection, handle: str) -> dict:
 
 def save_checkpoint(con, handle, user_id, recent_done, months_done, status,
                     error=None, replies_done=0):
-    """Write this handle's progress (an "upsert": insert, or update if it exists).
-
-    ON CONFLICT(handle) DO UPDATE fires when the handle row already exists;
-    `excluded.<col>` means "the value the INSERT tried to write".
-    """
+    """Insert or update a handle checkpoint."""
     con.execute(
         """INSERT INTO checkpoint (handle, user_id, recent_done, replies_done,
                                    months_done, status, error, updated_at)
@@ -162,11 +136,7 @@ def save_checkpoint(con, handle, user_id, recent_done, months_done, status,
 
 
 def store(con, tweet, handle, user_id, source) -> int:
-    """INSERT OR IGNORE one parsed twscrape Tweet. Returns 1 if new, 0 if duplicate.
-
-    cur.rowcount is how many rows the statement actually inserted — 0 when the
-    tweet_id already existed — which lets callers count only NEW tweets.
-    """
+    """Store a parsed twscrape tweet; return 1 if it was new."""
     cur = con.execute(
         """INSERT OR IGNORE INTO tweets
                (tweet_id, handle, user_id, created_at, source, raw_json, collected_at)
@@ -197,15 +167,8 @@ def _unwrap_result(res):
 def extract_raw_tweets(rep) -> list[dict]:
     """Pull the top-level raw Tweet objects out of a raw GraphQL response.
 
-    Walks every timeline 'entries' array and takes each entry's
-    content.itemContent.tweet_results.result (and module sub-items), which are
-    the exact objects X returns — matching the .ndjson archive format. Nested
-    quoted/retweeted sub-tweets are left inside their parent, not emitted twice.
-
-    Two nested helper functions do the work: walk() recursively descends the
-    whole response looking for lists called "entries" (their location varies by
-    endpoint), and from_entry() digs the tweet out of one entry. `out` collects
-    results from both because nested functions can read their enclosing scope.
+    Timeline endpoints place entries at different depths. Nested quoted and
+    retweeted objects remain inside their parent rather than becoming rows.
     """
     out = []
 
@@ -254,6 +217,20 @@ def store_raw(con, obj, handle, source) -> int:
     return cur.rowcount
 
 
+def raw_tweet_is_eligible(obj: dict, uid: int, since: date, until: date) -> bool:
+    """True for a target-authored raw tweet inside the requested [since, until)."""
+    leg = obj.get("legacy") or {}
+    if str(leg.get("user_id_str")) != str(uid):
+        return False
+    try:
+        created = datetime.strptime(
+            leg["created_at"], "%a %b %d %H:%M:%S %z %Y"
+        ).date()
+    except (KeyError, TypeError, ValueError):
+        return False
+    return since <= created < until
+
+
 def read_frame(csv_path: Path) -> list[dict]:
     import csv
     with csv_path.open() as f:
@@ -265,11 +242,11 @@ async def collect_handle(api, con, row, since, until, recent_limit,
                          verbose=False, raw=False) -> None:
     """Scrape one account: resolve the handle to a user id, then run the passes.
 
-    Order: Pass A (recent timeline, unless skip_recent — dataset runs skip it),
-    Pass B (month-by-month search over [since, until)), Pass C (replies tab,
-    unless skip_replies). Each pass checks the checkpoint first, so on a re-run
-    only unfinished work happens. `raw=True` stores the untouched GraphQL
-    objects (the dataset format); raw=False stores twscrape's parsed form.
+    Order: Pass A (recent timeline, unless skip_recent), Pass B
+    (month-by-month search over [since, until)), Pass C (replies tab, unless
+    skip_replies). Each pass checks the checkpoint first, so on a re-run only
+    unfinished work happens. `raw=True` stores the untouched GraphQL objects
+    (the dataset format); raw=False stores twscrape's parsed form.
     """
     handle = row["handle"].lstrip("@").strip()
     cp = load_checkpoint(con, handle)
@@ -292,9 +269,13 @@ async def collect_handle(api, con, row, since, until, recent_limit,
         if raw:
             async for rep in api.user_tweets_raw(uid, limit=recent_limit):
                 for obj in extract_raw_tweets(rep):
+                    if not raw_tweet_is_eligible(obj, uid, since, until):
+                        continue
                     n += store_raw(con, obj, handle, "timeline")
         else:
             async for tw in api.user_tweets(uid, limit=recent_limit):
+                if tw.user.id != uid or not (since <= tw.date.date() < until):
+                    continue
                 n += store(con, tw, handle, uid, "timeline")
                 if verbose and n and n % 100 == 0:
                     print(f"  [A] @{handle}: {n} recent so far ...", flush=True)
@@ -335,13 +316,14 @@ async def collect_handle(api, con, row, since, until, recent_limit,
         if raw:
             async for rep in api.user_tweets_and_replies_raw(uid, limit=recent_limit):
                 for obj in extract_raw_tweets(rep):
-                    # the replies tab embeds parent tweets by OTHER authors
-                    if str(obj.get("legacy", {}).get("user_id_str")) != str(uid):
+                    # The tab reaches outside the study window and embeds parent
+                    # tweets by other authors; neither belongs in this target.
+                    if not raw_tweet_is_eligible(obj, uid, since, until):
                         continue
                     n += store_raw(con, obj, handle, "replies_tab")
         else:
             async for tw in api.user_tweets_and_replies(uid, limit=recent_limit):
-                if tw.user.id != uid:
+                if tw.user.id != uid or not (since <= tw.date.date() < until):
                     continue
                 n += store(con, tw, handle, uid, "replies_tab")
                 if verbose and n and n % 100 == 0:
@@ -365,7 +347,8 @@ async def run_collection(frame, since, until, db_path,
     con = sqlite3.connect(str(db_path))
     init_db(con)
 
-    mode = ("search-only" if skip_recent else "two-pass") + (" | raw" if raw else "")
+    passes = ([] if skip_recent else ["A"]) + ["B"] + ([] if skip_replies else ["C"])
+    mode = "passes " + "+".join(passes) + (" | raw" if raw else "")
     print(f"Collecting {len(frame)} handles | window {since}..{until} | {mode}\n", flush=True)
     for row in frame:
         try:

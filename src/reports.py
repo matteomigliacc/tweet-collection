@@ -1,40 +1,9 @@
-"""Build the notification messages the batch scraper sends (Teams cards + email).
-
-This module contains no scraping logic at all. It takes the numbers that
-run_all.py collected during a batch run and turns them into three kinds of
-message:
-
-  * build_session_card()  -- one Microsoft Teams "Adaptive Card" summarising a
-                             whole run (posted at the end of every session).
-  * build_account_card()  -- a small Teams card for ONE finished account
-                             (only with run_all.py --notify-each).
-  * build_session_email() -- an email version of the session summary, used as
-                             a fallback when the Teams webhook fails.
-
-An "Adaptive Card" is just a JSON structure (nested Python dicts/lists) in a
-schema Microsoft defines: https://adaptivecards.io. Teams renders it as a
-formatted message. Nothing here sends anything — actual delivery lives in
-notify.py; these functions only *compose* the payloads, which makes them easy
-to tweak or test without spamming the channel.
-
-Vocabulary used throughout (matches run_all.py):
-  records   list of dicts, one per account processed this run, with keys
-            party, handle, since, until, tweets (int or None), seconds,
-            status ('complete' | 'partial' | 'failed').
-  done      accounts that became fully complete this run.
-  partial   accounts that made progress but aren't finished.
-  failed    accounts whose scrape raised a Python exception.
-  skipped   accounts that were already complete before the run started.
-"""
+"""Build Teams cards and fallback email summaries for dataset runs."""
 from datetime import datetime
 
 
 def fmt_dur(seconds: float) -> str:
-    """Format a duration in seconds as '2h 05m 11s' / '5m 03s' / '42s'.
-
-    divmod(a, b) returns (a // b, a % b) in one step: first split total
-    seconds into hours + remainder, then the remainder into minutes + seconds.
-    """
+    """Format seconds as a compact duration."""
     s = int(round(seconds))
     h, r = divmod(s, 3600)
     m, sec = divmod(r, 60)
@@ -48,38 +17,27 @@ def fmt_dur(seconds: float) -> str:
 def build_session_email(records: list[dict], done: int, partial: int, failed: int,
                         skipped: int, total: int, done_today: int,
                         session_secs: float) -> tuple[str, str, str]:
-    """Compose (subject, plaintext, html) for one batch-run summary email.
-
-    Emails carry two bodies: a plain-text version (always readable) and an
-    HTML version with the same content styled as a small dashboard. The mail
-    client picks whichever it can display.
-    """
-    # Sum tweets over the records that actually have a count. `if r.get("tweets")`
-    # skips both missing keys and None (a failed account never got a count).
-    total_tweets = sum(r["tweets"] for r in records if r.get("tweets"))
+    """Compose the plaintext and HTML versions of a run summary."""
+    total_records = sum(r["tweets"] for r in records if r.get("tweets"))
     complete_overall = skipped + done
     dur = fmt_dur(session_secs)
     subject = (f"[scraper] {done} new · {partial} partial · {failed} failed — "
-               f"{total_tweets:,} tweets in {dur}")
+               f"{total_records:,} records in {dur}")
 
-    # ---- plaintext ----
     lines = ["Populism scraper — session summary",
              "=" * 40,
              f"Duration:  {dur}",
              f"Processed: {len(records)} account(s) this run",
              f"Result:    {done} newly complete, {partial} partial, {failed} failed",
-             f"Tweets:    {total_tweets:,} collected this session",
+             f"Records:   {total_records:,} across processed datasets",
              f"Overall:   {complete_overall}/{total} targets complete ({done_today} done today)",
              "",
-             # {:22} pads to 22 chars (left-aligned); {:>8} right-aligns in 8.
-             f"{'Account':22}{'Party':16}{'Tweets':>8}{'Time':>9}  Status"]
+             f"{'Account':22}{'Party':16}{'Records':>8}{'Time':>9}  Status"]
     for r in records:
         tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "-"
         lines.append(f"@{r['handle']:21}{r['party']:16}{tw:>8}{fmt_dur(r['seconds']):>9}  {r['status']}")
     text = "\n".join(lines)
 
-    # ---- html ----
-    # status -> (text colour, background colour) for the little status pill
     badge = {"complete": ("#137333", "#e6f4ea"), "partial": ("#a56300", "#fef7e0"),
              "failed": ("#c5221f", "#fce8e6")}
     rows = ""
@@ -99,7 +57,6 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
             f"</tr>")
 
     def stat(label, value):
-        """One big-number tile for the header row of the email."""
         return (f"<td style='padding:14px 16px;text-align:center'>"
                 f"<div style='font-size:22px;font-weight:700;color:#111'>{value}</div>"
                 f"<div style='font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em'>{label}</div></td>")
@@ -111,12 +68,12 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
       🐦 Populism scraper &middot; session summary
     </div>
     <table style="width:100%;border-collapse:collapse;border-bottom:1px solid #eee">
-      <tr>{stat('Tweets', f'{total_tweets:,}')}{stat('New datasets', done)}{stat('Duration', dur)}{stat('Complete', f'{complete_overall}/{total}')}</tr>
+      <tr>{stat('Records', f'{total_records:,}')}{stat('New datasets', done)}{stat('Duration', dur)}{stat('Complete', f'{complete_overall}/{total}')}</tr>
     </table>
     <table style="width:100%;border-collapse:collapse;font-size:14px">
       <thead><tr style="text-align:left;color:#888;font-size:11px;text-transform:uppercase;letter-spacing:.04em">
         <th style="padding:10px 12px">Account</th><th style="padding:10px 12px">Party</th>
-        <th style="padding:10px 12px">Window</th><th style="padding:10px 12px;text-align:right">Tweets</th>
+        <th style="padding:10px 12px">Window</th><th style="padding:10px 12px;text-align:right">Records</th>
         <th style="padding:10px 12px;text-align:right">Time</th><th style="padding:10px 12px">Status</th>
       </tr></thead>
       <tbody>{rows}</tbody>
@@ -133,18 +90,12 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
 def build_session_card(records: list[dict], done: int, partial: int, failed: int,
                        skipped: int, total: int, done_today: int,
                        session_secs: float, monitor=None) -> dict:
-    """Compose an Adaptive Card (Teams) mirroring the session-summary email.
-
-    `monitor` is the run's `errmon.ErrorMonitor`. Without it the card can only
-    report `failed`, which counts Python exceptions — a run that lost thousands
-    of tweets to backend errors still shows "0 failed".
-    """
-    total_tweets = sum(r["tweets"] for r in records if r.get("tweets"))
+    """Compose the Teams summary for a batch run."""
+    total_records = sum(r["tweets"] for r in records if r.get("tweets"))
     complete_overall = skipped + done
     dur = fmt_dur(session_secs)
 
     def stat(value, label):
-        """One big-number column for the card's header row."""
         return {"type": "Column", "width": "stretch", "items": [
             {"type": "TextBlock", "text": str(value), "size": "ExtraLarge",
              "weight": "Bolder", "horizontalAlignment": "Center", "spacing": "None"},
@@ -163,7 +114,7 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
                  "text": f"{r['since']} → {r['until']}"}]},
             {"type": "Column", "width": "auto", "items": [
                 {"type": "TextBlock", "spacing": "None", "horizontalAlignment": "Right",
-                 "text": f"{tw} tweets · {fmt_dur(r['seconds'])}"},
+                 "text": f"{tw} records · {fmt_dur(r['seconds'])}"},
                 {"type": "TextBlock", "spacing": "None", "size": "Small", "weight": "Bolder",
                  "horizontalAlignment": "Right",
                  "color": colour.get(r["status"], "Default"), "text": r["status"]}]}]})
@@ -175,10 +126,9 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
                 {"type": "TextBlock", "size": "Large", "weight": "Bolder",
                  "text": "🐦 Populism scraper · session summary"},
                 {"type": "ColumnSet", "columns": [
-                    stat(f"{total_tweets:,}", "Tweets"), stat(done, "New datasets"),
+                    stat(f"{total_records:,}", "Records"), stat(done, "New datasets"),
                     stat(dur, "Duration"), stat(f"{complete_overall}/{total}", "Complete")]},
                 {"type": "Container", "separator": True, "items": rows},
-                # *list unpacks: zero elements when the run was clean, two when not
                 *_error_block(monitor),
                 {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
                  "separator": True,
@@ -203,7 +153,7 @@ def _error_block(monitor) -> list[dict]:
 
 
 def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> dict:
-    """Compose a small Adaptive Card for ONE finished account (--notify-each)."""
+    """Compose the optional per-account Teams card."""
     colour = {"complete": "Good", "partial": "Warning", "failed": "Attention"}
     icon = {"complete": "✅", "partial": "🟡", "failed": "❌"}
     tw = f"{rec['tweets']:,}" if rec.get("tweets") is not None else "—"
@@ -215,7 +165,7 @@ def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> 
                  "text": f"{icon.get(rec['status'], '•')} @{rec['handle']} · {rec['party']}"},
                 {"type": "FactSet", "facts": [
                     {"title": "Status", "value": rec["status"]},
-                    {"title": "Tweets", "value": tw},
+                    {"title": "Records", "value": tw},
                     {"title": "Window", "value": f"{rec['since']} → {rec['until']}"},
                     {"title": "Took", "value": fmt_dur(rec["seconds"])}]},
                 {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,

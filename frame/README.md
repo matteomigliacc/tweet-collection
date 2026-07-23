@@ -18,8 +18,8 @@ one row per spell, so their tweets are windowed to each tenure separately.
 | `leader_end` | Tenure end, `YYYY-MM-DD`, or `ongoing` for still-serving. |
 | `notes` | Free text — provenance / justification for the dates. |
 
-`run_all.py` clips every start to the **2017-01-01 study floor** and treats
-`ongoing` as today.
+`collect_dataset.py` clips every start to the **2017-03-23 study floor** and treats
+`ongoing` as the **2025-11-12 study ceiling**.
 
 ## `parties.csv` — official party accounts, by seat-holding spell
 
@@ -37,11 +37,11 @@ one row per spell — both scraped into the same account file, skipping the gap.
 | `seat_end` | Last day of the spell, `YYYY-MM-DD`, or `ongoing` for currently seated. |
 | `notes` | Free text — seat counts / provenance. Avoid commas (unquoted CSV). |
 
-`run_all.py` clips every `seat_start` to the **2017-01-01 study floor**, month-aligns
-it, and treats `ongoing` as today.
+`collect_dataset.py` clips every `seat_start` to the **2017-03-23 study floor**,
+month-aligns it, and treats `ongoing` as the **2025-11-12 study ceiling**.
 
-## `politicians.csv` — generic frame for `collect.py`
+## `politicians.csv` — generic frame for `collector.py`
 
-A plain handle list used by the standalone `collect.py --csv` path (and its
+A plain handle list used by the standalone `collector.py --csv` path (and its
 default). Columns: `handle,name,party,country`. Handy for ad-hoc runs outside the
 leader/party dataset.

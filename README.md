@@ -1,134 +1,299 @@
 # Populism Tweet Scraper
 
-Collects the complete tweet history of Dutch party leaders and party accounts
-on X (Twitter) for downstream **populism analysis** — built for academic
-research at Utrecht University.
+A reproducible pipeline for collecting tweets from Dutch political leaders and
+party accounts for academic research at Utrecht University.
 
-Given a *sampling frame* (CSV files listing who led which party when, and when
-each party held parliamentary seats), it scrapes every account for exactly its
-relevant window, stores the raw tweet JSON, and exports one clean
-newline-delimited JSON file per account. Collection is **checkpointed and
-idempotent**: interrupted runs resume where they stopped, and re-runs can only
-ever add tweets, never duplicate or overwrite them.
+The project takes a list of accounts and relevant date periods, collects the
+available tweets, saves its progress, checks the results against an independent
+collection, and prepares the finished datasets for 4CAT.
 
-Scraping happens via [twscrape](https://github.com/vladkens/twscrape)
-(cookie-authenticated X accounts, no API access required).
+It uses [twscrape](https://github.com/vladkens/twscrape) with browser session
+cookies, so it does not require access to the official X API.
 
-> **Repository scope:** this repo contains the code, the sampling frame, and
-> the documentation. The collected tweets themselves are not distributed here —
-> they are personal data under GDPR and governed by the project's Data
-> Management Plan.
+> **Project status:** the main dataset was collected and validated in July
+> 2026. The code remains available so the collection can be understood,
+> checked, repaired, or repeated.
 >
-> New to the code? **Start with [`docs/GUIDE.md`](docs/GUIDE.md)** — a
-> script-by-script walkthrough that assumes only basic Python.
+> **Data notice:** tweets are personal data. The working dataset and account
+> credentials are git-ignored and must be handled according to the project's
+> Data Management Plan.
 
-## How it works
+## What problem does it solve?
 
+Collecting historical X data through a browser is slow and difficult to repeat.
+Repeated searches can also produce different results. This project automates
+the process while keeping a record of:
+
+- which accounts and dates belong in the study;
+- which collection steps have finished;
+- where each tweet was found;
+- which tweets were missing from an independent reference collection;
+- which files were uploaded to 4CAT.
+
+The scraper cannot guarantee a complete archive. X search sometimes omits older
+replies and ordinary tweets, timeline endpoints are limited to roughly 3,200
+items, and deleted or inaccessible tweets cannot be recovered. The validation
+and repair tools make these limitations visible instead of treating every
+successful request as a complete result.
+
+## The workflow
+
+```text
+frame/leaders.csv + frame/parties.csv
+          who should be collected, and when
+                       │
+                       ▼
+          src/collect_dataset.py
+          builds and schedules collection jobs
+                       │
+                       ▼
+               src/collector.py
+        collects tweets in three complementary ways
+                       │
+                       ▼
+       data/dataset/<Party>/<handle>.sqlite
+          raw working store + progress checkpoint
+                       │
+                       ▼
+                src/flatten.py
+              exports raw NDJSON files
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+           analysis/     src/fetch_missing.py
+        checks recall     repairs known gaps by ID
+              │                 │
+              └────────┬────────┘
+                       ▼
+              src/upload_4cat.py
+       filters, converts, and uploads to 4CAT
 ```
-frame/leaders.csv + frame/parties.csv     WHO to scrape, and WHEN
-        │
-        ▼
-[1] src/run_all.py      builds the target list, applies the study window,
-        │               skips complete targets, logs + notifies (Teams/email)
-        ▼
-[2] src/collect.py      the engine: three passes per account (A/B/C below),
-        │               checkpointed + idempotent
-        ▼
-[3] src/flatten.py      exports each SQLite store to .ndjson (raw tweet
-        │               objects) or a tidy .csv for statistics
-        ▼
-[4] analysis/           recall validation against an independent reference scrape
-        ▼
-[5] src/fetch_missing.py  repairs residual holes by fetching tweet ids directly
-        ▼
-[6] src/upload_4cat.py    uploads finished datasets to a 4CAT instance
+
+## How tweets are collected
+
+For each account, the collection engine uses up to three passes:
+
+1. **Recent timeline** — reads the account's ordinary “Tweets” timeline. X
+   limits this to approximately 3,200 items.
+2. **Historical search** — searches `from:handle` month by month across the
+   relevant period. Monthly queries avoid the result ceiling of one large
+   search.
+3. **Tweets and replies** — reads the account's “Tweets & replies” timeline to
+   recover replies that X search may omit.
+
+The passes overlap deliberately. Each tweet ID is unique in the database, so
+finding the same tweet twice does not create a duplicate.
+
+The replies timeline can contain parent tweets written by other users. The
+collector checks the numerical author ID before accepting a timeline result.
+New timeline results are also checked against the target's date window.
+
+### Why three passes are still not always enough
+
+- X search can silently omit accessible tweets.
+- A query that reaches its result limit is silently truncated.
+- The recent and replies timelines only expose approximately 3,200 items.
+- Some backend errors return an empty result instead of raising an exception.
+- Very active or reply-heavy accounts can therefore have larger historical
+  gaps than quieter accounts.
+
+`src/errmon.py` watches for silent backend failures.
+`src/fetch_missing.py` can use known missing tweet IDs from a reference
+collection and request them individually when they are still available.
+
+## Inputs: the sampling frame
+
+The two committed CSV files under `frame/` define the dataset:
+
+- `leaders.csv` contains political leaders and their leadership periods.
+- `parties.csv` contains official party accounts and periods in which the party
+  held seats in the Tweede Kamer.
+
+The main study window is **2017-03-23 through 2025-11-12**. Leadership and
+seat-holding periods are clipped to that window.
+
+One target is one handle under one party and date window. If the same person
+appears under two parties, each period receives its own dataset file.
+
+See [`frame/README.md`](frame/README.md) for the CSV columns and date rules.
+
+## Outputs: SQLite, NDJSON, and 4CAT
+
+The three formats serve different purposes.
+
+### SQLite: working and provenance store
+
+```text
+data/dataset/<Party>/<handle>.sqlite
 ```
 
-One *target* = one handle within one date window, stored as
-`<Party>/<handle>.sqlite` (raw store + checkpoint) plus `<Party>/<handle>.ndjson`
-(the export — one raw GraphQL tweet object per line).
+The SQLite database contains the raw tweet JSON, collection source, and
+checkpoint information. Tweet IDs are primary keys and writes use
+`INSERT OR IGNORE`, making repeated runs safe.
 
-### The three passes (and why they exist)
+The checkpoint records:
 
-- **Pass A — recent timeline:** the newest ~3,200 tweets (X's hard cap).
-  Skipped in dataset runs; Pass B covers the same ground with date bounds.
-- **Pass B — bounded window:** `from:handle since:.. until:..` searches, split
-  month-by-month to sidestep the 3,200 ceiling.
-- **Pass C — replies tab:** X's search index **silently omits many replies**
-  (search-only recall can dip to ~80% on reply-heavy accounts), so the
-  "Tweets & replies" tab is read too. Other authors' tweets embedded in that
-  tab are filtered out by author id.
+- whether the recent-timeline pass finished;
+- which calendar months were searched;
+- whether the replies pass finished;
+- the last status or error.
 
-Two hard-won findings worth knowing if you build on this:
+Existing databases may contain timeline records outside a target's final study
+window. They are retained as a broad working archive.
 
-- A search query that exceeds its result limit is **silently truncated** — X
-  returns the newest N with no error. Keep the per-month limit far above any
-  plausible month (`SEARCH_LIMIT` in `collect.py`).
-- Backend errors during search **return zero tweets instead of raising**, so a
-  failing run looks like a quiet success. `src/errmon.py` watches the log
-  stream for exactly this and raises the alarm.
-- Some old replies are *permanently* absent from the search index; re-scraping
-  can never find them. They can still be fetched one-by-one by tweet id —
-  that's `src/fetch_missing.py`.
+### NDJSON: portable raw export
+
+```text
+data/dataset/<Party>/<handle>.ndjson
+```
+
+Each line contains one raw X GraphQL tweet object. The file is regenerated from
+SQLite and is convenient for streaming, comparison, and transfer.
+
+### 4CAT: filtered analysis dataset
+
+`src/upload_4cat.py` applies the authoritative leadership or parliamentary
+windows before upload. It then wraps each tweet in the format expected by
+4CAT's Zeeschuimer importer and creates a labelled dataset such as:
+
+```text
+@Robjetten (D66)
+```
+
+The SQLite database is the collection record; the 4CAT version is the
+date-filtered analysis dataset.
+
+## Quick start
+
+Requirements:
+
+- Python 3.10 or newer;
+- one or more X accounts with valid `auth_token` and `ct0` browser cookies.
+
+Set up the project:
+
+```bash
+./setup.sh
+source .venv/bin/activate
+python src/add_accounts.py
+```
+
+`add_accounts.py` saves cookies in the git-ignored `secrets/accounts.json` and
+can load and verify them immediately. To repeat only the loading step:
+
+```bash
+python src/load_accounts.py
+```
+
+Preview every target without contacting X:
+
+```bash
+python src/collect_dataset.py --dry-run
+```
+
+Choose one target interactively:
+
+```bash
+python src/collect_dataset.py
+```
+
+Run specific accounts:
+
+```bash
+python src/collect_dataset.py --all --only Robjetten,Nvanvroonhoven,VVD
+```
+
+Run every incomplete target:
+
+```bash
+python src/collect_dataset.py --all
+```
+
+For unattended operation, limits can be applied per run and per day:
+
+```bash
+python src/collect_dataset.py --all --limit 3 --daily-limit 15
+```
+
+Interrupted runs are safe to restart. Completed months and passes are skipped.
+
+## Validation and repair
+
+The dataset was compared with an independent Zeeschuimer collection using
+tweet IDs inside the same date windows:
+
+```text
+recall = shared in-window tweet IDs / reference in-window tweet IDs
+```
+
+The comparison also identifies parent and quoted tweets written by other
+accounts, which should not be counted as missing tweets from the target.
+
+- `analysis/recall_data.py` calculates the comparison.
+- `analysis/render_report.py` creates a self-contained HTML report.
+- `analysis/foreign_census.py` measures other-author tweets in the reference
+  files.
+- `src/fetch_missing.py` fetches known missing IDs individually and records IDs
+  that are no longer available.
+
+These scripts are kept separate from the collection engine so the validation
+does not simply repeat the scraper's assumptions.
+
+## Running unattended
+
+The project includes systemd services and timers for a headless server:
+
+- bounded batch collection;
+- checkpointed restarts;
+- session logs;
+- Teams notifications with email fallback;
+- nightly SURFdrive backup with archived previous versions;
+- automatic preparation and upload to 4CAT.
+
+The production scraping timer is currently inactive because the main collection
+has finished. The backup workflow remains useful.
+
+See [`deploy/README.md`](deploy/README.md) for the server setup and operating
+commands.
+
+## Which script should I use?
+
+| Script | Use it for |
+|---|---|
+| `src/collect_dataset.py` | Main entry point for the research dataset. |
+| `src/collector.py` | Reusable three-pass collection engine; also has a lower-level CLI. |
+| `src/flatten.py` | Export SQLite to raw NDJSON or a tidy CSV. |
+| `src/upload_4cat.py` | Filter and upload completed datasets to 4CAT. |
+| `src/fetch_missing.py` | Repair known gaps by requesting tweet IDs directly. |
+| `src/add_accounts.py` | Add browser-cookie accounts interactively. |
+| `src/load_accounts.py` | Load and verify the twscrape account pool. |
+| `src/scrape_account.py` | Ad-hoc interactive scrape outside the study frame. |
+| `src/errmon.py` | Detect otherwise silent X backend errors. |
+| `src/reports.py` | Build Teams and email run summaries. |
+| `src/notify.py` | Send Teams messages and fallback email. |
+| `src/parse_archive_pdf.py` | Separate experiment for the Rutte PDF archive. |
+
+For a script-by-script explanation of the Python code, read
+[`docs/GUIDE.md`](docs/GUIDE.md).
 
 ## Repository layout
 
-| Path | Purpose |
-|------|---------|
-| `src/run_all.py` | Batch runner / main entry point (study-window rules live here). |
-| `src/collect.py` | Three-pass collection engine. |
-| `src/flatten.py` | Export ndjson (dataset format) or tidy CSV. |
-| `src/fetch_missing.py` | By-id repair of tweets the search index omits. |
-| `src/upload_4cat.py` | Upload ndjsons to [4CAT](https://4cat.nl) as labeled import datasets. |
-| `src/errmon.py` | Backend-error watchdog (errors return zero tweets, not exceptions). |
-| `src/reports.py` / `src/notify.py` | Build / send Teams cards and fallback email notifications. |
-| `src/scrape.py` | Interactive ad-hoc scraper for any single handle. |
-| `src/add_accounts.py` / `src/load_accounts.py` | Manage the X account pool (cookie auth). |
-| `src/parse_archive_pdf.py` | Side experiment: recover tweets from an official OCR'd PDF archive. |
-| `analysis/` | Stdlib-only validation: recall vs. a reference scrape, rendered as an HTML report. |
-| `frame/` | **Sampling frame** (committed): `leaders.csv`, `parties.csv`, `politicians.csv`. |
-| `deploy/` | systemd units + notes for running unattended on a server (timers, quotas, off-site backup). |
-| `docs/` | `GUIDE.md` code walkthrough. |
-| `secrets/` | Cookies, webhook URLs, API tokens — **git-ignored**, templates provided. |
-| `data/` | Scraped output — **git-ignored**. |
-
-## Dataset rules (enforced by `src/run_all.py`)
-
-- **Study window:** 2017-03-23 (Tweede Kamer installation) → 2025-11-12 (TK
-  election). Nothing outside it is collected.
-- **Leaders:** scraped only for their leadership tenure (`frame/leaders.csv`;
-  `ongoing` → the ceiling), clipped to the study window.
-- **Party accounts:** only while the party held Tweede Kamer seats
-  (`frame/parties.csv`; a party that left parliament and returned has two seat
-  spells scraped into one file, skipping the gap).
-- A handle that led two parties (e.g. GroenLinks → GroenLinks-PvdA) gets two
-  separate files under the two party folders.
-- Storage is raw GraphQL tweet JSON with `tweet_id` as primary key and
-  `INSERT OR IGNORE` semantics: re-runs are idempotent.
-
-## Validation
-
-The dataset was validated against an independent reference scrape of the same
-accounts: clip both datasets to the tenure window, then
-**recall = shared tweet ids / reference ids in window**. `analysis/recall_data.py`
-computes per-handle recall (attributing misses to their true author — reference
-exports embed other people's tweets); `analysis/render_report.py` renders a
-self-contained HTML report. Residual gaps were repaired with
-`src/fetch_missing.py`.
-
-## Setup
-
-```bash
-./setup.sh                          # venv + dependencies + secrets scaffold
-source .venv/bin/activate
-python src/add_accounts.py          # paste X account cookies (auth_token + ct0)
-python src/run_all.py --dry-run     # list every target and its window
-python src/run_all.py               # interactive; or --all for unattended runs
+```text
+frame/       sampling-frame CSV files
+src/         collection, export, repair, and upload code
+analysis/    independent validation and report generation
+deploy/      headless-server services, timers, and backup script
+docs/        detailed code walkthrough
+secrets/     git-ignored credentials and configuration
+data/        git-ignored databases, exports, and logs
 ```
 
-The scraper authenticates with session cookies from real X accounts (each
-needs `auth_token` and `ct0`); several accounts give redundancy and
-throughput. Everything under `secrets/` is git-ignored. For unattended
-operation (systemd timers, daily quotas, notifications, off-site backup) see
-`deploy/README.md`.
+## Security and data handling
 
+- Never commit X cookies, SMTP passwords, Teams webhooks, or 4CAT tokens.
+- Everything under `secrets/` is ignored except example templates.
+- The collected dataset under `data/` is git-ignored.
+- Several authenticated X accounts improve redundancy and throughput but do
+  not remove X's collection limits.
+- Review the project's Data Management Plan before sharing or retaining tweet
+  data.
