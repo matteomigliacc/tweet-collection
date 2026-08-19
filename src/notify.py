@@ -36,20 +36,30 @@ CONFIG = ROOT / "secrets" / "smtp.json"
 TEAMS_CONFIG = ROOT / "secrets" / "teams.json"
 
 
-def _load_config() -> dict | None:
-    if not CONFIG.exists():
-        logger.warning(f"no {CONFIG.name} -> email notifications disabled")
+def _load_json_secret(path: Path, required_keys: tuple[str, ...],
+                      channel: str) -> dict | None:
+    """Load and validate one notification channel's JSON secret."""
+    if not path.exists():
+        logger.warning(f"no {path.name} -> {channel} notifications disabled")
         return None
     try:
-        cfg = json.loads(CONFIG.read_text())
-        for key in ("host", "port", "username", "password", "from_addr", "to_addr"):
+        cfg = json.loads(path.read_text())
+        for key in required_keys:
             if not cfg.get(key):
-                logger.warning(f"{CONFIG.name} missing '{key}' -> email disabled")
+                logger.warning(f"{path.name} missing '{key}' -> {channel} disabled")
                 return None
         return cfg
     except Exception as e:
-        logger.warning(f"could not read {CONFIG.name} ({e!r}) -> email disabled")
+        logger.warning(f"could not read {path.name} ({e!r}) -> {channel} disabled")
         return None
+
+
+def _load_config() -> dict | None:
+    # Email needs both the SMTP login and the envelope addresses before it can
+    # construct and deliver a message.
+    return _load_json_secret(
+        CONFIG, ("host", "port", "username", "password", "from_addr", "to_addr"),
+        "email")
 
 
 def send_email(subject: str, body: str, html: str | None = None) -> bool:
@@ -84,18 +94,8 @@ def send_email(subject: str, body: str, html: str | None = None) -> bool:
 
 
 def _load_teams_config() -> dict | None:
-    if not TEAMS_CONFIG.exists():
-        logger.warning(f"no {TEAMS_CONFIG.name} -> Teams notifications disabled")
-        return None
-    try:
-        cfg = json.loads(TEAMS_CONFIG.read_text())
-        if not cfg.get("webhook_url"):
-            logger.warning(f"{TEAMS_CONFIG.name} missing 'webhook_url' -> Teams disabled")
-            return None
-        return cfg
-    except Exception as e:
-        logger.warning(f"could not read {TEAMS_CONFIG.name} ({e!r}) -> Teams disabled")
-        return None
+    # Teams uses a Workflow webhook, so its URL is the only required secret.
+    return _load_json_secret(TEAMS_CONFIG, ("webhook_url",), "Teams")
 
 
 def send_teams(card: dict) -> bool:

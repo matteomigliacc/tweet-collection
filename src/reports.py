@@ -2,6 +2,19 @@
 from datetime import datetime
 
 
+TEAMS_STATUS_COLOURS = {
+    "complete": "Good", "partial": "Warning", "failed": "Attention",
+}
+
+
+def _totals(records: list[dict], skipped: int, done: int,
+            session_secs: float) -> tuple[int, int, str]:
+    """Values shared by the email and Teams session summaries."""
+    total_records = sum(r["tweets"] for r in records if r.get("tweets"))
+    complete_overall = skipped + done
+    return total_records, complete_overall, fmt_dur(session_secs)
+
+
 def fmt_dur(seconds: float) -> str:
     """Format seconds as a compact duration."""
     s = int(round(seconds))
@@ -18,9 +31,8 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
                         skipped: int, total: int, done_today: int,
                         session_secs: float) -> tuple[str, str, str]:
     """Compose the plaintext and HTML versions of a run summary."""
-    total_records = sum(r["tweets"] for r in records if r.get("tweets"))
-    complete_overall = skipped + done
-    dur = fmt_dur(session_secs)
+    total_records, complete_overall, dur = _totals(
+        records, skipped, done, session_secs)
     subject = (f"[scraper] {done} new · {partial} partial · {failed} failed — "
                f"{total_records:,} records in {dur}")
 
@@ -91,9 +103,8 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
                        skipped: int, total: int, done_today: int,
                        session_secs: float, monitor=None) -> dict:
     """Compose the Teams summary for a batch run."""
-    total_records = sum(r["tweets"] for r in records if r.get("tweets"))
-    complete_overall = skipped + done
-    dur = fmt_dur(session_secs)
+    total_records, complete_overall, dur = _totals(
+        records, skipped, done, session_secs)
 
     def stat(value, label):
         return {"type": "Column", "width": "stretch", "items": [
@@ -102,7 +113,6 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
             {"type": "TextBlock", "text": label, "size": "Small", "isSubtle": True,
              "horizontalAlignment": "Center", "spacing": "None"}]}
 
-    colour = {"complete": "Good", "partial": "Warning", "failed": "Attention"}
     rows = []
     for r in records:
         tw = f"{r['tweets']:,}" if r.get("tweets") is not None else "—"
@@ -117,7 +127,8 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
                  "text": f"{tw} records · {fmt_dur(r['seconds'])}"},
                 {"type": "TextBlock", "spacing": "None", "size": "Small", "weight": "Bolder",
                  "horizontalAlignment": "Right",
-                 "color": colour.get(r["status"], "Default"), "text": r["status"]}]}]})
+                 "color": TEAMS_STATUS_COLOURS.get(r["status"], "Default"),
+                 "text": r["status"]}]}]})
 
     return {"type": "AdaptiveCard", "version": "1.4",
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -154,7 +165,6 @@ def _error_block(monitor) -> list[dict]:
 
 def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> dict:
     """Compose the optional per-account Teams card."""
-    colour = {"complete": "Good", "partial": "Warning", "failed": "Attention"}
     icon = {"complete": "✅", "partial": "🟡", "failed": "❌"}
     tw = f"{rec['tweets']:,}" if rec.get("tweets") is not None else "—"
     return {"type": "AdaptiveCard", "version": "1.4",
@@ -170,6 +180,6 @@ def build_account_card(rec: dict, index: int, total: int, done_overall: int) -> 
                     {"title": "Took", "value": fmt_dur(rec["seconds"])}]},
                 {"type": "TextBlock", "size": "Small", "isSubtle": True, "wrap": True,
                  "separator": True,
-                 "color": colour.get(rec["status"], "Default"),
+                 "color": TEAMS_STATUS_COLOURS.get(rec["status"], "Default"),
                  "text": (f"Target {index}/{total} · {done_overall}/{total} complete · "
                           f"{datetime.now():%H:%M}")}]}

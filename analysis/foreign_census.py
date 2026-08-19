@@ -17,47 +17,14 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-RAW = Path.home() / "Raw Data"
-MIRROR = ROOT / "data" / "dataset_server"
-
-
-def objects(path):
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except ValueError:
-                continue
-            if "rest_id" not in obj:
-                for key in ("tweet", "data", "result"):
-                    if isinstance(obj.get(key), dict) and "rest_id" in obj[key]:
-                        obj = obj[key]
-                        break
-            if "rest_id" in obj and obj.get("legacy"):
-                yield obj
-
-
-def screen_name(obj):
-    user = ((obj.get("core") or {}).get("user_results") or {}).get("result") or {}
-    for src in (user.get("core") or {}, user.get("legacy") or {}):
-        if src.get("screen_name"):
-            return src["screen_name"]
-    return ""
+from _common import mirror_paths, objects, parse_created_at, raw_paths, screen_name
 
 
 def tweet_year(obj):
-    try:
-        return datetime.strptime(obj["legacy"]["created_at"],
-                                 "%a %b %d %H:%M:%S %z %Y").year
-    except Exception:
-        return None
+    created_at = parse_created_at(obj)
+    return created_at.year if created_at else None
 
 
 def kind(obj):
@@ -91,11 +58,11 @@ def main():
     args = ap.parse_args()
 
     ours = defaultdict(list)
-    for path in MIRROR.glob("*/*.ndjson"):
+    for path in mirror_paths():
         ours[path.stem.lower()].append(path)
 
     files = defaultdict(list)
-    for path in sorted(RAW.glob("*.ndjson")) + sorted(RAW.glob("*/*.ndjson")):
+    for path in raw_paths():
         match = re.match(r"@?([A-Za-z0-9_]+)", path.name)
         if match:
             files[match.group(1).lower()].append(path)

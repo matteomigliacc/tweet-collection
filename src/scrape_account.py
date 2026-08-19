@@ -13,21 +13,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from collector import run_collection
+from cli_prompts import ask, ask_yes_no
 from flatten import flatten_db
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-
-
-def ask(prompt: str, default: str | None = None) -> str:
-    suffix = f" [{default}]" if default is not None else ""
-    while True:
-        val = input(f"{prompt}{suffix}: ").strip()
-        if val:
-            return val
-        if default is not None:
-            return default
-        print("  (required)")
 
 
 def ask_date(prompt: str, default: str | None = None, allow_today=False) -> date:
@@ -40,19 +30,6 @@ def ask_date(prompt: str, default: str | None = None, allow_today=False) -> date
         except ValueError:
             print("  format must be YYYY-MM-DD (e.g. 2020-03-15)"
                   + (" or 'today'" if allow_today else ""))
-
-
-def ask_yes_no(prompt: str, default: bool) -> bool:
-    d = "Y/n" if default else "y/N"
-    while True:
-        raw = input(f"{prompt} [{d}]: ").strip().lower()
-        if not raw:
-            return default
-        if raw in {"y", "yes"}:
-            return True
-        if raw in {"n", "no"}:
-            return False
-        print("  please answer y or n")
 
 
 async def main() -> None:

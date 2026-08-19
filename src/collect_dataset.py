@@ -108,7 +108,7 @@ def is_complete(db: Path, handle: str, since: date, until: date) -> bool:
         con.close()
     if not row or not row[1] or not row[2]:
         return False
-    return expected_months(since, until) <= set(json.loads(row[0] or "[]"))
+    return expected_months(since, until + timedelta(days=1)) <= set(json.loads(row[0] or "[]"))
 
 
 async def run_one(job: dict) -> int:

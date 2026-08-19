@@ -13,34 +13,12 @@ import asyncio
 import json
 from pathlib import Path
 
+from cli_prompts import ask, ask_yes_no
+
 ROOT = Path(__file__).resolve().parent.parent
 SECRETS = ROOT / "secrets" / "accounts.json"
 
 REQUIRED_COOKIES = ("auth_token", "ct0")
-
-
-def ask(prompt: str, default: str | None = None) -> str:
-    suffix = f" [{default}]" if default is not None else ""
-    while True:
-        val = input(f"{prompt}{suffix}: ").strip()
-        if val:
-            return val
-        if default is not None:
-            return default
-        print("  (required)")
-
-
-def ask_yes_no(prompt: str, default: bool) -> bool:
-    d = "Y/n" if default else "y/N"
-    while True:
-        raw = input(f"{prompt} [{d}]: ").strip().lower()
-        if not raw:
-            return default
-        if raw in {"y", "yes"}:
-            return True
-        if raw in {"n", "no"}:
-            return False
-        print("  please answer y or n")
 
 
 def missing_tokens(cookie_str: str) -> list[str]:

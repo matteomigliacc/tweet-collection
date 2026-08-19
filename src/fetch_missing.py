@@ -23,6 +23,7 @@ import sqlite3
 import sys
 from collections import Counter
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -53,18 +54,18 @@ def reference_files(raw_dir: str, handle: str) -> list[Path]:
             if pat.match(p.name)]
 
 
-def reference_ids(paths, uid: str, since: date, until: date) -> set[str]:
-    """Ids authored by uid inside [since, until] — this target's window only.
+@lru_cache(maxsize=1)
+def _reference_rows(paths: tuple[Path, ...]) -> tuple[tuple[str, str, date], ...]:
+    """Read one handle's reference files once, streaming them line by line.
 
-    A reference file covers the handle's whole life, not one spell of it, so the
-    window filter is what keeps a JesseKlaver GroenLinks tweet out of the PRO
-    database.
+    The one-entry cache is enough for adjacent tenure spells of the same handle
+    without retaining every account's multi-gigabyte source data for the whole
+    run.
     """
-    want: set[str] = set()
+    rows = []
     for path in paths:
         with open(path, errors="replace") as fh:
-            # split on \n only: splitlines() shears JSON at U+2028 in tweet text
-            for line in fh.read().split("\n"):
+            for line in fh:
                 line = line.strip()
                 if not line:
                     continue
@@ -75,16 +76,31 @@ def reference_ids(paths, uid: str, since: date, until: date) -> set[str]:
                 if isinstance(obj.get("data"), dict) and "rest_id" not in obj:
                     obj = obj["data"]
                 leg = obj.get("legacy") or {}
-                tid, created = obj.get("rest_id") or leg.get("id_str"), leg.get("created_at")
-                if not tid or not created or str(leg.get("user_id_str")) != str(uid):
+                tid = obj.get("rest_id") or leg.get("id_str")
+                created = leg.get("created_at")
+                author = leg.get("user_id_str")
+                if not tid or not created or author is None:
                     continue
                 try:
-                    d = datetime.strptime(created, FMT).date()
+                    created_date = datetime.strptime(created, FMT).date()
                 except Exception:
                     continue
-                if since <= d <= until:
-                    want.add(str(tid))
-    return want
+                rows.append((str(tid), str(author), created_date))
+    return tuple(rows)
+
+
+def reference_ids(paths, uid: str, since: date, until: date) -> set[str]:
+    """Ids authored by uid inside [since, until] — this target's window only.
+
+    A reference file covers the handle's whole life, not one spell of it, so the
+    window filter is what keeps a JesseKlaver GroenLinks tweet out of the PRO
+    database.
+    """
+    # This check is intentionally closed while collector.raw_tweet_is_eligible
+    # is half-open: jobs pass their raw inclusive end date here, but collector's
+    # callers first add one day and pass an exclusive end date.
+    return {tid for tid, author, created in _reference_rows(tuple(paths))
+            if author == str(uid) and since <= created <= until}
 
 
 def obj_date(obj: dict) -> date | None:
@@ -166,7 +182,7 @@ def held_from_ndjson(path: Path) -> tuple[set[str], str | None]:
     """
     ids, authors = set(), Counter()
     with open(path, errors="replace") as fh:
-        for line in fh.read().split("\n"):
+        for line in fh:
             line = line.strip()
             if not line:
                 continue

@@ -171,7 +171,7 @@ def main() -> None:
     if not args.no_sync and dataset == ROOT / "data" / "dataset_server":
         print("syncing dataset from server ...", flush=True)
         subprocess.run(
-            ["rsync", "-rtz", "-e", "ssh -i " + str(Path.home() / ".ssh" / "id_ed25519_scraper"),
+            ["rsync", "-rtz", "-e", "ssh -i " + str(Path.home() / ".ssh" / "id_ed25519"),
              "--include=*/", "--include=*.ndjson", "--exclude=*",
              "root@192.168.1.106:/opt/populism-scraping/data/dataset/", str(dataset) + "/"],
             check=True)

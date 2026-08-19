@@ -29,7 +29,7 @@ local rsync mirror (the local `data/dataset/` scratch copy was deleted in the
 | | |
 |---|---|
 | Container | CTID 106 `populism-scraper`, Debian 13, unprivileged |
-| Address | `192.168.1.106` — `ssh -i ~/.ssh/id_ed25519_scraper root@192.168.1.106` |
+| Address | `192.168.1.106` — `ssh -i ~/.ssh/id_ed25519 root@192.168.1.106` |
 | Install | `/opt/populism-scraping` (venv at `.venv/`) |
 | Schedule | `scrape.timer` 5×/day (01/06/11/16/21h +0–2h jitter) → `collect_dataset.py --all --limit 3 --daily-limit 15` |
 | Daily quota | `data/dataset/.quota.json` (15/day, resets per calendar day) |
@@ -44,7 +44,7 @@ Server specifics:
 - twscrape CLI must be pointed at the pool explicitly (`--db data/accounts.db`);
   bare `twscrape accounts` creates a stray empty `./accounts.db` (delete it).
 - macOS rsync is openrsync (protocol 29): no `--info` flags. Pull the dataset with
-  `rsync -rtz -e "ssh -i ~/.ssh/id_ed25519_scraper" --include='*/'
+  `rsync -rtz -e "ssh -i ~/.ssh/id_ed25519" --include='*/'
   --include='*.ndjson' --exclude='*' root@192.168.1.106:/opt/populism-scraping/data/dataset/ data/dataset_server/`
 - Deploy code changes by rsync-ing the changed `src/` files over, units to
   `/etc/systemd/system/` + `systemctl daemon-reload && systemctl restart scrape.timer`.
