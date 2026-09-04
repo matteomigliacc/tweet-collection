@@ -13,8 +13,8 @@ The commands below are for macOS or Linux. On Windows, use WSL.
 Clone the repository, then install the dependencies:
 
 ```bash
-git clone https://github.com/matteomigliacc/populism-tweet-scraper.git
-cd populism-tweet-scraper
+git clone https://github.com/matteomigliacc/tweet-collection.git
+cd tweet-collection
 bash setup.sh
 source .venv/bin/activate
 python collection.py --help
