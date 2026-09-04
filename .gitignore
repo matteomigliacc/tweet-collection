@@ -21,9 +21,6 @@ data/
 /analysis/*.txt
 /analysis/*.csv
 
-# Research application documents are kept locally
-/X_DSA_Researcher_Application_Questions.*
-
 # Python
 .venv/
 __pycache__/
