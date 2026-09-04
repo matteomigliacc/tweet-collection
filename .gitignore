@@ -2,6 +2,7 @@
 secrets/*
 !secrets/accounts.example.json
 !secrets/smtp.example.json
+!secrets/teams.example.json
 *.cookies
 accounts.db
 
@@ -9,6 +10,19 @@ accounts.db
 data/
 *.sqlite
 *.parquet
+*.ndjson
+*.log
+
+# Generated results and temporary work
+/tmp/
+/outputs/
+/analysis/*.json
+/analysis/*.html
+/analysis/*.txt
+/analysis/*.csv
+
+# Research application documents are kept locally
+/X_DSA_Researcher_Application_Questions.*
 
 # Python
 .venv/
