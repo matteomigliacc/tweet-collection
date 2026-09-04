@@ -2,31 +2,48 @@
 
 This project collects tweets from Dutch political parties and their leaders,
 keeps the dates needed for the study, and prepares the data for analysis in 4CAT.
-It also compares the dataset with the professors' earlier exports, so researchers
+It also compares the dataset with reference exports, so researchers
 can see which tweets are shared and which are missing.
 
-The original collection, repairs, and 4CAT imports finished by August 2026.
-The commands remain available for future work. Running `collection.py` without a
-command only shows help.
+## Getting started
 
-## Start here
+You need Python 3.10 or newer, Bash, and an X login with valid session cookies.
+The commands below are for macOS or Linux. On Windows, use WSL.
 
-From this project folder, run:
-
-```bash
-.venv/bin/python collection.py
-```
-
-Add a command and `--help` to see its options, for example:
+Clone the repository, then install the dependencies:
 
 ```bash
-.venv/bin/python collection.py combine --help
+git clone https://github.com/matteomigliacc/populism-tweet-scraper.git
+cd populism-tweet-scraper
+bash setup.sh
+source .venv/bin/activate
+python collection.py --help
 ```
 
-On a new machine, `bash setup.sh` creates the Python environment, installs the
-requirements, and offers to set up X login accounts. These logins provide access
-to X; they are separate from the accounts whose tweets the study collects.
-Keep login cookies and service credentials private.
+Setup creates a Python environment and offers to add your X login cookies.
+You can also add logins later with `python collection.py add-logins`, or edit
+`secrets/accounts.json` using the supplied example and run
+`python collection.py load-logins`. Loading logins makes a request to X to check
+that they work. These logins are separate from the accounts you want to study.
+Keep cookies and credentials private.
+
+Edit `frame/accounts.csv` to choose the accounts and dates for your project.
+The included rows describe the original Dutch political study; replace them
+if you want a different collection. Preview the account list before collecting:
+
+```bash
+python collection.py collect --dry-run
+```
+
+Start collection with terminal prompts:
+
+```bash
+python collection.py collect
+```
+
+For a non-interactive run, use `python collection.py collect --all`.
+Running `collection.py` without a command only shows help. Add `--help` to any
+command to see its options.
 
 ## How the data moves
 
@@ -36,7 +53,7 @@ Keep login cookies and service credentials private.
    `notes` describe the entry. Separate periods use separate rows.
 2. **Collect tweets.** The code reads the timeline, searches overlapping calendar
    months, and reads replies. It stores only tweets by the requested account
-   within the row's dates. The study covers 2017-03-23 through 2025-11-12.
+   within the row's dates. The included study dates span 2017-03-23 through 2025-11-12.
 3. **Store and export.** Each party/account has a SQLite database, which stores
    tweets and collection progress. An NDJSON file contains one tweet per line
    for later processing. A CSV export gives a table suitable for spreadsheet use.
@@ -66,20 +83,21 @@ Python scripts can also be run directly.
 | `combine` | `analysis/combine_datasets.py` | Prepare one dataset without duplicate tweets. |
 | `upload` | `src/upload_4cat.py` | Send separate account datasets to 4CAT. |
 | `upload-combined` | `analysis/upload_combined_dataset.py` | Send a combined dataset to 4CAT in resumable parts. |
-| `compare` | `analysis/recall_data.py` | Compare the local dataset copy with reference exports. |
+| `compare` | `analysis/recall_data.py` | Compare collected tweets with reference exports. |
 | `report` | `analysis/comparison_report.py` | Turn comparison results into an HTML page. |
 | `collect-missing` | `src/collect_missing.py` | Try collecting specific missing tweet IDs from reference files. |
 
-`deploy/backup.sh` backs up server files to SURFdrive.
+`deploy/backup.sh` supports backups to SURFdrive.
 `deploy/upload_yoda.sh` transfers dataset files to Yoda; its `--dry-run` option
 shows the proposed transfer without contacting Yoda. These use separate service
-configuration and are not part of the command menu.
+configuration and are not part of the command menu. The deployment scripts
+contain settings from the original installation; adapt them before use.
 
 ## Understanding the comparison
 
-The reference exports are in `~/Raw Data`. The comparison reads the local server
-copy in `data/dataset_server/` and uses the dates in `frame/accounts.csv`.
-“Recall” means the percentage of reference tweet IDs found in our dataset.
+Supply a folder of reference exports and the dataset you want to compare.
+The comparison uses the account list and its exact date windows.
+“Recall” means the percentage of reference tweet IDs found in the collected dataset.
 `own_recall` excludes missing tweets attributed to another author. Reference
 exports can include parent tweets and quoted tweets by other people.
 
@@ -89,7 +107,7 @@ within the study dates, but now runs through the same comparison command.
 You can save the results and make the HTML report with:
 
 ```bash
-.venv/bin/python collection.py compare --other-authors --output analysis/dataset_recall.json
+.venv/bin/python collection.py compare --reference data/reference --dataset data/dataset --accounts frame/accounts.csv --other-authors --output analysis/dataset_recall.json
 .venv/bin/python collection.py report
 ```
 
@@ -111,19 +129,43 @@ requests and storage; `src/read_account_csv.py` reads the account list;
 progress messages. `analysis/read_tweets.py` shares the code for reading tweet
 files, authors, and dates.
 
-## Where the data lives
+## Data files and optional uploads
 
-The authoritative dataset is on the home server at
-`/opt/populism-scraping/data/dataset/`. The Mac's `data/dataset_server/` is a copy
-for analysis. `data/dataset/` on the Mac is test space, not the finished dataset.
-Exports read all rows in a database; older databases may include dates outside
-the current CSV. Combining and 4CAT upload apply the CSV date limits again.
+Collection writes files under `data/dataset/<party>/`: a SQLite database for
+each account and an NDJSON export with one tweet per line. Login details are
+stored in `secrets/accounts.json` and the login database in `data/accounts.db`.
+Datasets, credentials, and generated analysis results are excluded from Git;
+they are not included when you download this repository.
 
-Generated comparison files, temporary work, datasets, and private application
-documents stay on this machine. Git tracks the code, account list, and guide.
+To combine your collected files:
 
-The server's collection and backup timers were disabled when checked on
-2026-08-30. Updating local code does not update that server or restart collection.
+```bash
+.venv/bin/python collection.py combine --dataset data/dataset --out data/combined/all_tweets_sorted.ndjson
+```
+
+Exports read every row in a database. Combining and 4CAT upload apply the account
+CSV's date limits again, which matters if you change those dates later.
+
+4CAT is optional and requires your own instance and credentials. To preview
+separate-account uploads from your collection folder:
+
+```bash
+.venv/bin/python collection.py upload --dataset data/dataset --no-sync --dry-run
+```
+
+Use `--dataset` explicitly for combining, comparison, and uploads: some scripts
+retain defaults from the original study. Keep `--no-sync` for uploads to use
+only your selected files. Before uploading, create `secrets/fourcat.json`:
+
+```json
+{
+  "base_url": "https://your-4cat-instance.example",
+  "api_token": "YOUR_API_TOKEN"
+}
+```
+
+Replace these placeholders with your instance URL and API token, then run the
+upload command without `--dry-run`.
 
 ## Check code changes
 
