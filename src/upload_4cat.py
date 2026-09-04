@@ -1,85 +1,38 @@
 #!/usr/bin/env python3
-"""Filter dataset NDJSON files and import them into 4CAT.
-
-Authentication is read from secrets/fourcat.json:
-{"base_url": "...", "api_token": "..."}.
-
-Usage:
-  python src/upload_4cat.py --dry-run              # list what would upload
-  python src/upload_4cat.py --handle Nvanvroonhoven
-  python src/upload_4cat.py                        # upload everything
-  python src/upload_4cat.py --dataset data/dataset   # explicit dataset root
-"""
+"""Filter dataset NDJSON files and import them into 4CAT."""
 from __future__ import annotations
 
 import argparse
-import base64
-import csv
 import json
 import subprocess
 import sys
 import time
 import urllib.parse
-import urllib.request
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
+
+from client_4cat import PLATFORM, api, tweet_envelope
+
+from read_account_csv import build_jobs
 
 ROOT = Path(__file__).resolve().parent.parent
 SECRETS = ROOT / "secrets" / "fourcat.json"
-PLATFORM = "twitter.com"  # Zeeschuimer platform id for X/Twitter
 POLL_SECS = 5
 POLL_TRIES = 60
-FLOOR = date(2017, 3, 23)      # study floor: 2017 Tweede Kamer installation
-CEILING = date(2025, 11, 12)   # 2025 TK election: study window ends here
 TWEET_FMT = "%a %b %d %H:%M:%S %z %Y"
 
 
 def load_windows() -> dict:
-    """(party, handle_lower) -> [(start, end)], clipped to FLOOR..CEILING.
-
-    Keyed by party too because e.g. JesseKlaver has separate dataset files
-    (and tenure windows) under GroenLinks, GroenLinks-PvdA and PRO.
-    """
+    """Return the exact CSV windows for each (party, handle) pair."""
     windows: dict = {}
-    for fn, s_col, e_col in [("frame/leaders.csv", "leader_start", "leader_end"),
-                             ("frame/parties.csv", "seat_start", "seat_end")]:
-        with open(ROOT / fn) as f:
-            for row in csv.DictReader(f):
-                h = (row.get("handle") or "").strip()
-                if not h:
-                    continue
-                s = max(date.fromisoformat(row[s_col]), FLOOR)
-                e = CEILING if row[e_col].strip() == "ongoing" \
-                    else min(date.fromisoformat(row[e_col]), CEILING)
-                # a window entirely outside FLOOR..CEILING (e.g. PRO, formed
-                # after the 2025 election) stays in the dict as an empty list:
-                # the handle is in the frame but has nothing inside the study.
-                windows.setdefault((row["party"], h.lower()), [])
-                if s <= e:
-                    windows[(row["party"], h.lower())].append((s, e))
+    for job in build_jobs(ROOT / "frame" / "accounts.csv"):
+        windows.setdefault((job["party"], job["handle"].lower()), []).append(
+            (job["since"], job["until"]))
     return windows
 
 
-def api(cfg: dict, path: str, data: bytes | None = None,
-        headers: dict | None = None, query: dict | None = None) -> dict:
-    """Make one authenticated 4CAT request and decode its JSON response."""
-    url = f"{cfg['base_url']}{path}"
-    if query:
-        url += "?" + urllib.parse.urlencode(query)
-    req = urllib.request.Request(
-        url, data=data,
-        headers={"Authentication": cfg["api_token"], **(headers or {})})
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        return json.loads(resp.read().decode())
-
-
 def to_zeeschuimer(nd: Path, windows: list) -> bytes:
-    """Wrap bare GraphQL tweet objects in the Zeeschuimer item envelope.
-
-    4CAT's /api/import-dataset/ hands the file to the zeeschuimer-import
-    worker, which expects one envelope per line with the tweet under "data"
-    — bare tweets end up as an unlabeled generic upload instead.
-    """
+    """Wrap bare GraphQL tweet objects in the Zeeschuimer item envelope."""
     now_ms = int(time.time() * 1000)
     out = []
     # NB: split on real newlines only — str.splitlines() also splits on
@@ -90,44 +43,24 @@ def to_zeeschuimer(nd: Path, windows: list) -> bytes:
         if not line:
             continue
         tweet = json.loads(line)
-        # Older working stores can contain replies outside the final study window.
+        # Older working stores can contain tweets outside the CSV window.
         ca = tweet.get("legacy", {}).get("created_at")
         if not ca:
             continue
         d = datetime.strptime(ca, TWEET_FMT).date()
         if not any(s <= d <= e for s, e in windows):
             continue
-        # 4CAT's map_item does tweet["id"] unguarded; twscrape output only has
-        # rest_id. Synthesize the GraphQL global id Zeeschuimer would have kept.
-        if "id" not in tweet and tweet.get("rest_id"):
-            tweet["id"] = base64.b64encode(f"Tweet:{tweet['rest_id']}".encode()).decode()
-        # A quoted tweet that was deleted arrives as {"result": {"__typename":
-        # "TweetUnavailable"}}; 4CAT's mapper indexes ["result"]["legacy"]
-        # unguarded and crashes on it, so drop the stub.
-        qr = (tweet.get("quoted_status_result") or {}).get("result") or {}
-        if tweet.get("quoted_status_result") and "legacy" not in qr and "tweet" not in qr:
-            del tweet["quoted_status_result"]
-        out.append(json.dumps({
-            "nav_index": i,
-            "item_id": tweet.get("rest_id", str(i)),
-            "timestamp_collected": now_ms,
-            "last_updated": now_ms,
-            "source_platform": PLATFORM,
-            "source_platform_url": "https://x.com",
-            "source_url": "https://x.com/search",
-            "user_agent": "populism-scraper upload_4cat.py",
-            "data": tweet,
-        }, ensure_ascii=False))
-    return ("\n".join(out) + "\n").encode()
+        out.append(tweet_envelope(
+            tweet, i, now_ms, user_agent="populism-scraper upload_4cat.py",
+        ))
+    return b"".join(out)
 
 
 def upload_one(cfg: dict, nd: Path, label: str, windows: list) -> dict:
-    """Upload one ndjson: POST the wrapped tweets, poll until 4CAT finishes
-    processing (up to POLL_TRIES x POLL_SECS), then rename the dataset from
-    the generic import label to '@handle (Party)'."""
+    """Upload an account file, wait for processing, and apply its label."""
     raw = to_zeeschuimer(nd, windows)
     if not raw.strip():
-        print(f"  -- {label}: no tweets inside the study window, skipping")
+        print(f"  -- {label}: no tweets inside its CSV window, skipping")
         return {"label": label, "skipped": "empty window"}
     n_lines = raw.count(b"\n")
     print(f"  uploading {label}: {len(raw)/1e6:.1f} MB, {n_lines} tweets ...", flush=True)
@@ -163,12 +96,11 @@ def main() -> None:
                     help="only upload these handles (repeatable)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-sync", action="store_true",
-                    help="skip the rsync from the scraper server before uploading")
+                    help="skip the rsync from the collection server before uploading")
     args = ap.parse_args()
 
-    cfg = json.loads(SECRETS.read_text())
     dataset = Path(args.dataset)
-    if not args.no_sync and dataset == ROOT / "data" / "dataset_server":
+    if not args.dry_run and not args.no_sync and dataset == ROOT / "data" / "dataset_server":
         print("syncing dataset from server ...", flush=True)
         subprocess.run(
             ["rsync", "-rtz", "-e", "ssh -i " + str(Path.home() / ".ssh" / "id_ed25519"),
@@ -182,29 +114,26 @@ def main() -> None:
     if not files:
         sys.exit(f"no ndjson files found under {dataset}")
 
+    all_windows = load_windows()
+    skipped = [f for f in files if (f.parent.name, f.stem.lower()) not in all_windows]
+    files = [f for f in files if (f.parent.name, f.stem.lower()) in all_windows]
+    for f in skipped:
+        print(f"  -- @{f.stem} ({f.parent.name}): not in the CSV, skipping")
+    if not files:
+        sys.exit("no CSV-listed ndjson files selected")
+
     print(f"{len(files)} file(s) from {dataset}:")
     for f in files:
         print(f"  {f.parent.name}/{f.name}  ({f.stat().st_size/1e6:.1f} MB)")
     if args.dry_run:
         return
 
-    all_windows = load_windows()
+    cfg = json.loads(SECRETS.read_text())
     results = []
     for f in files:
         label = f"@{f.stem} ({f.parent.name})"
         key = (f.parent.name, f.stem.lower())
-        if key in all_windows:
-            wins = all_windows[key]
-        else:
-            # not under this party in the frame: any window for the handle,
-            # else (handle not in frame at all) the full study span
-            by_handle = [(p, h) for (p, h) in all_windows if h == f.stem.lower()]
-            wins = sum((all_windows[k] for k in by_handle), []) if by_handle \
-                else [(FLOOR, CEILING)]
-        if not wins:
-            print(f"  -- {label}: window lies entirely outside the study span, skipping")
-            results.append({"label": label, "skipped": "outside study span"})
-            continue
+        wins = all_windows[key]
         try:
             results.append(upload_one(cfg, f, label, wins))
         except Exception as e:

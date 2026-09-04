@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the populism scraper 5x/day, jittered
+Description=Run the tweet collection 5x/day, jittered
 
 [Timer]
 # 01:00, 06:00, 11:00, 16:00, 21:00 local time (container TZ = Europe/Amsterdam),

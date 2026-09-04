@@ -1,12 +1,12 @@
 [Unit]
-Description=Populism tweet scraper (throttled batch run)
+Description=Tweet collection (throttled batch run)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/populism-scraping
-# flock: scraping and the SURFdrive backup never run at the same time
+# flock: collection and the SURFdrive backup never run at the same time
 ExecStart=/usr/bin/flock /run/populism-scraper.lock /opt/populism-scraping/.venv/bin/python src/collect_dataset.py --all --limit 3 --daily-limit 15
 TimeoutStartSec=6h
 Nice=10

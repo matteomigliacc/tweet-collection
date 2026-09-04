@@ -1,27 +1,4 @@
-"""Optional notifications for the batch scraper (Teams webhook and/or email).
-
-Each channel reads its settings from a git-ignored file under secrets/ and is a
-safe no-op (logs a warning) when that file is missing or unreadable, so a
-notification problem can never abort scraping.
-
-secrets/teams.json schema (see secrets/teams.example.json):
-{
-  "webhook_url": "https://prod-..logic.azure.com:443/workflows/..."
-}
-Get the URL from Teams: channel > Workflows > "Post to a channel when a webhook
-request is received" (Power Automate). The card is posted as an Adaptive Card.
-
-secrets/smtp.json schema (see secrets/smtp.example.json):
-{
-  "host": "smtp.gmail.com",
-  "port": 587,
-  "use_tls": true,          # STARTTLS on 587; set false + port 465 for SMTPS
-  "username": "you@gmail.com",
-  "password": "app-password-here",
-  "from_addr": "you@gmail.com",
-  "to_addr": "you@gmail.com"
-}
-"""
+"""Optional Teams and email notifications configured through secrets/*.json."""
 import json
 import smtplib
 import ssl
@@ -63,8 +40,7 @@ def _load_config() -> dict | None:
 
 
 def send_email(subject: str, body: str, html: str | None = None) -> bool:
-    """Send one email (plaintext, plus an optional HTML alternative). Returns True on
-    success, False on any failure (failures are logged, never raised)."""
+    """Send one email (plaintext, plus an optional HTML alternative). Returns True on     success, False on any failure (failures are logged, never raised)."""
     cfg = _load_config()
     if cfg is None:
         return False
@@ -99,8 +75,7 @@ def _load_teams_config() -> dict | None:
 
 
 def send_teams(card: dict) -> bool:
-    """Post one Adaptive Card to the Teams Workflows webhook. Returns True on
-    success, False on any failure (failures are logged, never raised)."""
+    """Post one Adaptive Card to the Teams Workflows webhook. Returns True on     success, False on any failure (failures are logged, never raised)."""
     cfg = _load_teams_config()
     if cfg is None:
         return False
@@ -123,15 +98,15 @@ def send_teams(card: dict) -> bool:
         return False
 
 
-if __name__ == "__main__":  # quick manual test: python src/notify.py
+if __name__ == "__main__":  # quick manual test: python src/notifications.py
     test_card = {"type": "AdaptiveCard", "version": "1.4",
                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                  "body": [{"type": "TextBlock", "weight": "Bolder",
-                           "text": "🐦 Scraper test card"},
+                           "text": "🐦 Collection test card"},
                           {"type": "TextBlock", "wrap": True, "text":
                            "If you can read this, secrets/teams.json is configured correctly."}]}
     ok_teams = send_teams(test_card)
     print("teams: sent" if ok_teams else "teams: not sent (see warnings above)")
-    ok = send_email("[scraper] test email",
+    ok = send_email("[collection] test email",
                     "If you can read this, secrets/smtp.json is configured correctly.")
     print("email: sent" if ok else "email: not sent (see warnings above)")

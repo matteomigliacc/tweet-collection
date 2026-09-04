@@ -1,19 +1,4 @@
-"""Fetch known missing tweets directly by ID.
-
-Some older replies remain available by ID but never appear in X search or the
-limited replies timeline. Reference files supply the worklist; this script
-fetches the current GraphQL object rather than copying reference JSON.
-
-    python src/fetch_missing.py --handle Gertjansegers --dry-run
-    python src/fetch_missing.py --handle Gertjansegers
-    python src/fetch_missing.py --all --limit 500
-
-Only tweets by the target author and inside that target's window are added.
-Unavailable IDs are recorded in `fetch_gone` and skipped on later runs.
-
-Reference files live in ~/Raw Data on the Mac; on the scraper box point --raw at
-wherever they were synced.
-"""
+"""Recover reference tweet IDs from X within each target's inclusive frame window."""
 import argparse
 import asyncio
 import json
@@ -28,14 +13,14 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from collect_dataset import build_jobs, job_paths
+from read_account_csv import build_jobs, job_paths
 
 # Worklists can be generated on a machine without twscrape installed.
 def _fetching_imports():
-    global API, flatten, extract_raw_tweets, store_raw
+    global API, export_dataset, extract_raw_tweets, store_raw
     from twscrape import API
-    import flatten
-    from collector import extract_raw_tweets, store_raw
+    import export_dataset
+    from tweet_collection import extract_raw_tweets, store_raw
 
 RAW_DEFAULT = os.path.expanduser("~/Raw Data")
 FMT = "%a %b %d %H:%M:%S %z %Y"
@@ -43,11 +28,7 @@ ACCOUNTS_DB = "data/accounts.db"
 
 
 def reference_files(raw_dir: str, handle: str) -> list[Path]:
-    """Every professors' file for this handle — top level or party subfolder.
-
-    Some handles have a first *and* second run; both are read and merged by id,
-    which is their most complete picture.
-    """
+    """Every professors' file for this handle — top level or party subfolder."""
     pat = re.compile(r"^@?" + re.escape(handle) + r"[ _.]", re.I)
     return [p for p in (list(Path(raw_dir).glob("*.ndjson"))
                         + list(Path(raw_dir).glob("*/*.ndjson")))
@@ -56,12 +37,7 @@ def reference_files(raw_dir: str, handle: str) -> list[Path]:
 
 @lru_cache(maxsize=1)
 def _reference_rows(paths: tuple[Path, ...]) -> tuple[tuple[str, str, date], ...]:
-    """Read one handle's reference files once, streaming them line by line.
-
-    The one-entry cache is enough for adjacent tenure spells of the same handle
-    without retaining every account's multi-gigabyte source data for the whole
-    run.
-    """
+    """Read one handle's reference files once, streaming them line by line."""
     rows = []
     for path in paths:
         with open(path, errors="replace") as fh:
@@ -90,12 +66,7 @@ def _reference_rows(paths: tuple[Path, ...]) -> tuple[tuple[str, str, date], ...
 
 
 def reference_ids(paths, uid: str, since: date, until: date) -> set[str]:
-    """Ids authored by uid inside [since, until] — this target's window only.
-
-    A reference file covers the handle's whole life, not one spell of it, so the
-    window filter is what keeps a JesseKlaver GroenLinks tweet out of the PRO
-    database.
-    """
+    """Ids authored by uid inside [since, until] — this target's window only."""
     # This check is intentionally closed while collector.raw_tweet_is_eligible
     # is half-open: jobs pass their raw inclusive end date here, but collector's
     # callers first add one day and pass an exclusive end date.
@@ -126,18 +97,7 @@ def mark_gone(con, tweet_id: str, handle: str, reason: str) -> None:
 
 async def fetch_ids_into_db(api, con, handle: str, uid: str, since: date,
                             until: date, todo: list[str]) -> dict:
-    """Fetch each id in `todo` from X and store what belongs in this database.
-
-    The shared core of both repair paths (--handle/--all and --worklist).
-    For every id it asks X for the tweet (`tweet_details_raw`); the response
-    carries the whole thread around it, so each returned object is kept only if
-    (a) it was written by `uid` (the thread drags in other authors) and
-    (b) its date falls inside [since, until] (this target's own window).
-
-    Returns counts: got (wanted ids stored), extra (in-window thread-mates
-    stored), absent (ids X no longer returns -> recorded in fetch_gone),
-    outside (dropped as out-of-window).
-    """
+    """Fetch each id in `todo` from X and store what belongs in this database."""
     got = extra = absent = outside = 0
     for i, tid in enumerate(todo, 1):
         try:
@@ -150,10 +110,6 @@ async def fetch_ids_into_db(api, con, handle: str, uid: str, since: date,
             absent += 1
             mark_gone(con, tid, handle, "not returned")
         for obj in objs:
-            # A reply drags its whole thread down with it. Keep only this
-            # target's own tweets, and only those inside this target's window —
-            # otherwise a 2024 reply would land in the database that is supposed
-            # to hold one spell of 2017-2021, and the spells stop being separable.
             if str((obj.get("legacy") or {}).get("user_id_str")) != uid:
                 continue
             d = obj_date(obj)
@@ -175,11 +131,7 @@ async def fetch_ids_into_db(api, con, handle: str, uid: str, since: date,
 
 
 def held_from_ndjson(path: Path) -> tuple[set[str], str | None]:
-    """(ids, dominant author id) straight from an exported ndjson.
-
-    Used when building a worklist on the Mac, where data/dataset/*.sqlite is a
-    historical snapshot and data/dataset_server/ holds the rsync'd truth.
-    """
+    """(ids, dominant author id) straight from an exported ndjson."""
     ids, authors = set(), Counter()
     with open(path, errors="replace") as fh:
         for line in fh:
@@ -227,9 +179,11 @@ async def fetch_target(api, job: dict, raw_dir: str, limit: int | None,
                 "known_gone": 0, "to_fetch": len(todo), "ids": todo}
 
     if not db.exists():
-        return {"label": label, "skipped": "no database — scrape it first"}
-    con = sqlite3.connect(str(db))
-    ensure_gone_table(con)
+        return {"label": label, "skipped": "no database — collect it first"}
+    readonly = dry_run or api is None
+    con = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) if readonly else sqlite3.connect(str(db))
+    if not readonly:
+        ensure_gone_table(con)
     # tweet_id and user_id are stored as INTEGER, the reference files carry them
     # as strings — compare as strings throughout or every id looks missing.
     have = {str(r[0]) for r in con.execute("SELECT tweet_id FROM tweets")}
@@ -247,7 +201,10 @@ async def fetch_target(api, job: dict, raw_dir: str, limit: int | None,
     uid = str(row[0])
 
     want = reference_ids(refs, uid, since, until)
-    gone = set() if retry_gone else {
+    has_gone = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fetch_gone'"
+    ).fetchone()
+    gone = set() if retry_gone or not has_gone else {
         str(r[0]) for r in con.execute("SELECT tweet_id FROM fetch_gone")}
     todo = sorted(want - have - gone)
     if limit:
@@ -263,7 +220,7 @@ async def fetch_target(api, job: dict, raw_dir: str, limit: int | None,
     total = con.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
     con.close()
 
-    flatten.export_ndjson(db, ndjson)
+    export_dataset.export_ndjson(db, ndjson)
     res.update(counts, dataset_total=total)
     return res
 
@@ -274,7 +231,7 @@ async def fetch_ids(api, job: dict, todo: list[str]) -> dict:
     db, ndjson = job_paths(job)
     label = f"{job['party']}/{handle} {since}..{until}"
     if not db.exists():
-        return {"label": label, "skipped": "no database — scrape it first"}
+        return {"label": label, "skipped": "no database — collect it first"}
 
     con = sqlite3.connect(str(db))
     ensure_gone_table(con)
@@ -290,7 +247,7 @@ async def fetch_ids(api, job: dict, todo: list[str]) -> dict:
     counts = await fetch_ids_into_db(api, con, handle, uid, since, until, todo)
     total = con.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
     con.close()
-    flatten.export_ndjson(db, ndjson)
+    export_dataset.export_ndjson(db, ndjson)
     return {"label": label, "to_fetch": len(todo), "dataset_total": total, **counts}
 
 
@@ -350,7 +307,7 @@ async def main() -> None:
                          "against, since the local sqlite is a stale snapshot")
     ap.add_argument("--worklist", metavar="FILE",
                     help="fetch the ids in a file written by --emit-worklist. "
-                         "Lets the scraper box work without the reference folder.")
+                         "Lets the collection box work without the reference folder.")
     args = ap.parse_args()
 
     if args.worklist:

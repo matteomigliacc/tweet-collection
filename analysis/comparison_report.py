@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""Render the dataset comparison page from analysis/dataset_recall.json.
-
-    python3 analysis/recall_data.py > analysis/dataset_recall.json
-    python3 analysis/render_report.py <out.html>
-
-Rows are baked into the HTML, so the page needs no scripting and there is no
-template to keep in sync.
-"""
+"""Render the dataset comparison page from analysis/dataset_recall.json."""
+import argparse
 import html
 import json
 import os
-import sys
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RECALL = os.path.join(ROOT, "analysis", "dataset_recall.json")
@@ -98,9 +92,12 @@ td.pt{color:var(--ink-2)}
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "analysis",
-                                                             "dataset-report.html")
-    report = json.load(open(RECALL))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", default=os.path.join(ROOT, "analysis", "dataset-report.html"))
+    parser.add_argument("--input", default=RECALL, help="recall JSON to render")
+    args = parser.parse_args()
+    out = args.output
+    report = json.loads(Path(args.input).read_text(encoding="utf-8"))
     rows = sorted(report["rows"], key=lambda r: -max(r["dataset"], r["ref"]))
 
     ref = sum(r["ref"] for r in rows)
@@ -109,7 +106,7 @@ def main():
     extra = sum(r["extra"] for r in rows)
     own_missing = sum(r["own_missing"] for r in rows)
     foreign = sum(r["foreign_missing"] for r in rows)
-    scale = max(max(r["dataset"], r["ref"]) + r["own_missing"] for r in rows)
+    scale = max((max(r["dataset"], r["ref"]) + r["own_missing"] for r in rows), default=1) or 1
 
     bars = []
     for r in rows:
@@ -150,31 +147,51 @@ def main():
             "</tr>"
         )
 
-    page = f"""<title>Dataset vs reference — Wendy Project</title>
+    other_section = ""
+    if "other_authors" in report:
+        other = report["other_authors"]
+        other_rows = "".join(
+            f'<tr><td>@{html.escape(row["handle"])}</td>'
+            f'<td class="r num">{row["total"]:,}</td>'
+            f'<td class="r num">{row["other"]:,}</td>'
+            f'<td class="r num">{row["other_in_dataset"]:,}</td></tr>'
+            for row in other["rows"])
+        other_section = f"""<section><h2>Other authors — all reference dates</h2>
+<p>This section includes dates outside the CSV windows and handles outside the account list.
+It counts each tweet ID once per handle. A tweet found under several handles counts again.</p>
+<p>Tweet types describe the tweets themselves; they do not tell us why the reference export included them.</p>
+<div class="tblwrap"><table><thead><tr><th>Handle</th><th>Reference tweets</th>
+<th>Other authors' tweets</th><th>Also in dataset</th></tr></thead><tbody>{other_rows}</tbody></table></div></section>"""
+    notes = "".join(f"<p>{html.escape(note)}</p>" for note in report.get("notes", []))
+    empty = "<p>No reference tweets matched the account dates.</p>" if not rows else ""
+    page = f"""<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tweet dataset compared with reference exports</title>
 <style>{CSS}</style>
 <div class="wrap">
 
 <header>
-  <h1>Scraped dataset against the reference scrapes</h1>
-  <p class="stamp num">{len(rows)} accounts · 23 Mar 2017 – 12 Nov 2025 · generated {report["generated"].replace("T", " ")}</p>
+  <h1>Collected dataset compared with reference exports</h1>
+  <p class="stamp num">{len(rows)} accounts · dates from the account CSV · generated {html.escape(report["generated"].replace("T", " "))}</p>
 </header>
 
+{empty}
 <div class="stats">
   <div class="stat"><span class="k">Reference tweets</span>
-    <span class="v num">{ref:,}</span><span class="n">in ~/Raw Data, in window</span></div>
+    <span class="v num">{ref:,}</span><span class="n">within the account dates</span></div>
   <div class="stat"><span class="k">Our dataset</span>
-    <span class="v num">{dataset:,}</span><span class="n">+{100 * extra / ref:.1f}% over reference</span></div>
+    <span class="v num">{dataset:,}</span><span class="n">+{100 * extra / ref if ref else 0:.1f}% over reference</span></div>
   <div class="stat"><span class="k">Tweets we added</span>
     <span class="v num" style="color:var(--extra)">+{extra:,}</span><span class="n">not in their files</span></div>
   <div class="stat"><span class="k">Theirs we lack</span>
-    <span class="v num" style="color:var(--miss)">{own_missing:,}</span><span class="n">524 locked · 5 dead ids</span></div>
+    <span class="v num" style="color:var(--miss)">{own_missing:,}</span><span class="n">own tweets missing from our dataset</span></div>
 </div>
 
 <div class="key">
   <span><i style="background:var(--held)"></i>both ({shared:,})</span>
   <span><i style="background:var(--extra)"></i>ours only ({extra:,})</span>
   <span><i style="background:var(--miss)"></i>theirs only ({own_missing:,})</span>
-  <span><i style="background:var(--dead)"></i>other authors in their files ({foreign:,})</span>
+  <span><i style="background:var(--dead)"></i>missing tweets by other authors ({foreign:,})</span>
 </div>
 
 <section>
@@ -189,7 +206,7 @@ def main():
   <div class="tblwrap"><table>
     <thead><tr>
       <th>Handle</th><th>Party</th><th class="r">Reference</th><th class="r">Ours</th>
-      <th class="r">Added</th><th class="r">Missing</th><th class="r">Recall</th>
+      <th class="r">Added</th><th class="r">Missing</th><th class="r">Adjusted recall</th>
     </tr></thead>
     <tbody>
 {chr(10).join(trs)}
@@ -201,13 +218,16 @@ def main():
   <h2>Method</h2>
   <div class="notes">
     <p>Matched on exact <span class="num">rest_id</span>, each account clipped to its own tenure or seat window.</p>
-    <p>Missing and recall count only tweets the account itself wrote; other authors' tweets embedded in the reference files are excluded.</p>
+    <p>Missing counts tweets written by the named account. Adjusted recall is shared tweets divided by shared tweets plus missing tweets by that account. Shared tweets can include other authors. Raw recall in the JSON is shared tweets divided by all reference tweets within the dates.</p>
+    <p>These percentages measure overlap with the reference exports, not whether every tweet on X was collected.</p>
+    {notes}
   </div>
 </section>
 
-</div>
+{other_section}
+</div></html>
 """
-    open(out, "w", encoding="utf-8").write(page)
+    Path(out).write_text(page, encoding="utf-8")
     print(f"{out}: {len(rows)} handles, dataset {dataset:,} vs reference {ref:,} (+{extra:,})")
 
 

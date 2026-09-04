@@ -1,27 +1,4 @@
-"""Watch twscrape's log stream during a run and report backend errors to Teams.
-
-Why this exists: an errored search query returns *zero tweets* rather than
-raising, so `collect_dataset.run_batch` counts the target as "complete" and the month is
-checkpointed as done. On 2026-07-19 that silently dropped ~36,500 tweets across
-seven party accounts while the end-of-run card reported "0 failed". The scrape
-log is the only place the damage is visible while it is happening.
-
-Two kinds of message show up in that stream and they mean opposite things:
-
-  (-1) Dependency / DeadlineExceeded / OverCapacity / Unavailable
-      X's backend refused the query. It returned no tweets. Data is being lost.
-
-  No account available for queue "..."
-      twscrape hit a rate limit and is *waiting*. It will query for real when the
-      window reopens. Benign — counted, never alarmed on.
-
-A healthy hour produces 0-4 errors; the hour that ate the data produced 502. Any
-error at all is therefore worth reporting, and `spike_threshold` per window marks
-the point where the run should be considered untrustworthy.
-
-Used by collect_dataset.py; safe to import anywhere. Every failure path is swallowed and
-logged — a notification problem must never abort scraping.
-"""
+"""Monitor backend failures that can checkpoint empty months without raising errors."""
 import asyncio
 import re
 import time
@@ -30,7 +7,7 @@ from datetime import datetime
 
 from loguru import logger
 
-import notify
+import notifications
 
 # "API unknown error: 200 - 235/500 - account4 - (-1) DeadlineExceeded: Unspecified"
 ERROR_RE = re.compile(r"\(-1\)\s*(\w+)")
@@ -43,17 +20,8 @@ DATA_LOSS_KINDS = frozenset({"Dependency", "DeadlineExceeded", "OverCapacity",
 
 
 class ErrorMonitor:
-    """Counts backend errors on the loguru stream and posts periodic Teams cards.
+    """Counts backend errors on the loguru stream and posts periodic Teams cards."""
 
-    `window_minutes` is how often a report is posted; a window with no errors is
-    skipped entirely, so a clean run stays silent. `spike_threshold` is the error
-    count within one window above which the run is flagged as losing data.
-    """
-
-    # Calibrated by replaying the 2026-07-19 run: healthy stretches peaked at 12
-    # errors per 10-min window while still returning ~12k tweets/hour, and the
-    # collapse ran 49-217. 25 separates them without crying wolf on transient
-    # OverCapacity blips.
     def __init__(self, window_minutes: float = 10.0, spike_threshold: int = 25):
         self.window_seconds = max(30.0, window_minutes * 60.0)
         self.spike_threshold = spike_threshold
@@ -129,7 +97,7 @@ class ErrorMonitor:
             title = f"🛑 Error spike — {n} failed queries in {mins:.0f} min"
             note = ("X's backend is refusing queries. Failed queries return **zero "
                     "tweets** and the month is still checkpointed as done, so this "
-                    "run is losing data. Stop it and re-scrape these handles later.")
+                    "run is losing data. Stop it and re-collect these handles later.")
             colour = "Attention"
         else:
             title = f"⚠️ {n} failed quer{'y' if n == 1 else 'ies'} in the last {mins:.0f} min"
@@ -146,12 +114,12 @@ class ErrorMonitor:
                 {"type": "TextBlock", "weight": "Bolder", "size": "Medium",
                  "color": colour, "wrap": True, "text": title},
                 {"type": "TextBlock", "wrap": True, "spacing": "None",
-                 "text": f"while scraping **{self.current_target}** · "
+                 "text": f"while collection **{self.current_target}** · "
                          f"{elapsed:.0f} min into the run"},
                 {"type": "FactSet", "facts": facts},
                 {"type": "TextBlock", "wrap": True, "text": note},
                 {"type": "TextBlock", "size": "Small", "isSubtle": True,
-                 "spacing": "None", "text": f"{datetime.now():%H:%M} · scrape monitor"},
+                 "spacing": "None", "text": f"{datetime.now():%H:%M} · collect monitor"},
             ],
         }
 
@@ -163,7 +131,7 @@ class ErrorMonitor:
         if sum(errs.values()) >= self.spike_threshold:
             self.spikes += 1
         try:
-            return notify.send_teams(self.build_card(errs, waits))
+            return notifications.send_teams(self.build_card(errs, waits))
         except Exception as e:
             logger.warning(f"error-monitor card failed ({e!r})")
             return False
@@ -171,7 +139,7 @@ class ErrorMonitor:
     def final_summary(self) -> str:
         """One line for the end-of-run console output and session card."""
         if not self.errors_total:
-            return f"scrape clean — 0 backend errors, {self.total_waits} rate-limit waits"
+            return f"collect clean — 0 backend errors, {self.total_waits} rate-limit waits"
         kinds = ", ".join(f"{k} {v}" for k, v in self.totals.most_common(4))
         warn = "  ** months may have been checkpointed empty **" if self.data_loss_total else ""
         return (f"{self.errors_total} backend errors ({kinds}), "
@@ -208,7 +176,7 @@ class ErrorMonitor:
         self.remove()
 
 
-if __name__ == "__main__":  # self-test: python src/errmon.py  (no Teams post)
+if __name__ == "__main__":  # self-test: python src/collection_errors.py  (no Teams post)
     real_lines = [
         'API unknown error: 200 -  6/50 - BroodjeHarpjmb - (-1) Dependency: Unspecified',
         'API unknown error: 200 - 235/500 - account4 - (-1) DeadlineExceeded: Unspecified',

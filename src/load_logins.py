@@ -1,8 +1,4 @@
-"""Load X accounts (via browser cookies) into twscrape's pool and verify them.
-
-Reads secrets/accounts.json (git-ignored), adds each account using its
-auth_token/ct0 cookies, then does a live fetch to prove the cookies authenticate.
-"""
+"""Load cookie-authenticated accounts into twscrape and verify with a live request."""
 import asyncio
 import json
 from pathlib import Path

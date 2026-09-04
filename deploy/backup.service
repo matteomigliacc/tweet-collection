@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/populism-scraping
-# flock: never upload while a scrape is writing the databases (and vice versa)
+# flock: never upload while collection is writing the databases (and vice versa)
 ExecStart=/usr/bin/flock /run/populism-scraper.lock /opt/populism-scraping/deploy/backup.sh
 TimeoutStartSec=4h
 Nice=10

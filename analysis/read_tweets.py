@@ -1,8 +1,4 @@
-"""Shared, stdlib-only readers for the independent analysis scripts.
-
-This module deliberately never imports from ``src``: the analyses are an
-independent check on the scraper rather than another view through its code.
-"""
+"""Shared, stdlib-only readers for the independent analysis scripts."""
 import json
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +23,8 @@ def objects(path):
             # The professors' files sometimes nest the tweet one level down
             # (Zeeschuimer's "data" envelope, or a "tweet"/"result" wrapper);
             # unwrap until we're holding the object with rest_id itself.
+            if not isinstance(obj, dict):
+                continue
             if "rest_id" not in obj:
                 for key in ("tweet", "data", "result"):
                     if isinstance(obj.get(key), dict) and "rest_id" in obj[key]:
@@ -54,11 +52,11 @@ def screen_name(obj):
     return ""
 
 
-def raw_paths():
+def raw_paths(root=RAW):
     """All professors' exports, both top-level and in party folders."""
-    return sorted(RAW.glob("*.ndjson")) + sorted(RAW.glob("*/*.ndjson"))
+    return sorted(Path(root).glob("*.ndjson")) + sorted(Path(root).glob("*/*.ndjson"))
 
 
-def mirror_paths():
+def mirror_paths(root=MIRROR):
     """All NDJSON files in the local mirror of the server dataset."""
-    return MIRROR.glob("*/*.ndjson")
+    return Path(root).glob("*/*.ndjson")

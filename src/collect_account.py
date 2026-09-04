@@ -1,20 +1,11 @@
-"""Interactive tweet-scraper front-end.
-
-Run it and answer the prompts — no flags to remember:
-
-    python src/scrape_account.py
-
-It asks for a handle, a date window, and a couple of options, shows a summary
-to confirm, then runs the same engine as collector.py and optionally flattens
-the result to a tidy CSV.
-"""
+"""Interactive single-account collection and CSV export."""
 import asyncio
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from collector import run_collection
+from tweet_collection import run_collection
 from cli_prompts import ask, ask_yes_no
-from flatten import flatten_db
+from export_dataset import flatten_db
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -34,10 +25,10 @@ def ask_date(prompt: str, default: str | None = None, allow_today=False) -> date
 
 async def main() -> None:
     print("=" * 60)
-    print("  Tweet scraper — answer the prompts (Ctrl-C to quit)")
+    print("  Tweet collection — answer the prompts (Ctrl-C to quit)")
     print("=" * 60)
 
-    handle = ask("\nHandle to scrape (with or without @)").lstrip("@").strip()
+    handle = ask("\nHandle to collect (with or without @)").lstrip("@").strip()
 
     since = ask_date("Start date (YYYY-MM-DD)")
     while True:
@@ -64,10 +55,10 @@ async def main() -> None:
     print("\n" + "-" * 60)
     print(f"  Handle:   @{handle}")
     print(f"  Window:   {since}  ->  {until}  (inclusive)")
-    print(f"  Mode:     {'timeline + search' if include_recent else 'search only'}")
+    print(f"  Mode:     {'timeline + search + replies' if include_recent else 'search + replies'}")
     print(f"  Database: {db_path}")
     print("-" * 60)
-    if not ask_yes_no("Start scraping with these settings?", default=True):
+    if not ask_yes_no("Start collection with these settings?", default=True):
         print("Aborted.")
         return
 

@@ -33,10 +33,10 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
     """Compose the plaintext and HTML versions of a run summary."""
     total_records, complete_overall, dur = _totals(
         records, skipped, done, session_secs)
-    subject = (f"[scraper] {done} new · {partial} partial · {failed} failed — "
+    subject = (f"[collection] {done} new · {partial} partial · {failed} failed — "
                f"{total_records:,} records in {dur}")
 
-    lines = ["Populism scraper — session summary",
+    lines = ["Populism collection — session summary",
              "=" * 40,
              f"Duration:  {dur}",
              f"Processed: {len(records)} account(s) this run",
@@ -77,7 +77,7 @@ def build_session_email(records: list[dict], done: int, partial: int, failed: in
 <div style="background:#f4f5f7;padding:24px 0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#222">
   <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
     <div style="background:#1f2933;color:#fff;padding:18px 22px;font-size:16px;font-weight:600">
-      🐦 Populism scraper &middot; session summary
+      🐦 Populism collection &middot; session summary
     </div>
     <table style="width:100%;border-collapse:collapse;border-bottom:1px solid #eee">
       <tr>{stat('Records', f'{total_records:,}')}{stat('New datasets', done)}{stat('Duration', dur)}{stat('Complete', f'{complete_overall}/{total}')}</tr>
@@ -135,7 +135,7 @@ def build_session_card(records: list[dict], done: int, partial: int, failed: int
             "msteams": {"width": "Full"},
             "body": [
                 {"type": "TextBlock", "size": "Large", "weight": "Bolder",
-                 "text": "🐦 Populism scraper · session summary"},
+                 "text": "🐦 Populism collection · session summary"},
                 {"type": "ColumnSet", "columns": [
                     stat(f"{total_records:,}", "Records"), stat(done, "New datasets"),
                     stat(dur, "Duration"), stat(f"{complete_overall}/{total}", "Complete")]},

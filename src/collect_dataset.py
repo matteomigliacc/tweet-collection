@@ -1,30 +1,8 @@
-"""Build and run collection jobs for the research dataset.
+"""Collect frame targets into SQLite and NDJSON; CSV dates are inclusive.
 
-Reads frame/leaders.csv (party leaders + their tenure dates) and frame/parties.csv
-(party accounts), computes each target's date window, and writes one SQLite/NDJSON
-pair under data/dataset/<Party>/.
-
-Dataset rules (one "target" = one handle within one date window):
-  * Study window: 2017-03-23 (Tweede Kamer installation, FLOOR) to
-    2025-11-12 (TK election, CEILING). Nothing outside it is requested.
-  * Leaders: their tenure only, clipped to the study window. "ongoing" in the
-    CSV means "until the ceiling".
-  * Party accounts: only while the party held Tweede Kamer seats — one
-    seat_start/seat_end spell per CSV row, month-aligned. A party that left and
-    later returned (e.g. 50PLUS) has two rows, both scraped into the one
-    account file (the out-of-parliament gap is skipped).
-  * A handle can appear under two parties (e.g. Klaver: GroenLinks, then
-    GroenLinks-PvdA) -> two separate files under the two party folders.
-
-Usage:
-  python src/collect_dataset.py --dry-run              # list every job + window, scrape nothing
-  python src/collect_dataset.py                        # interactive, one target at a time
-  python src/collect_dataset.py --all --limit 3 --daily-limit 15
-  python src/collect_dataset.py --only handle1,handle2
-"""
+Checkpoint completion describes collection progress, not validated dataset completeness."""
 import argparse
 import asyncio
-import csv
 import json
 import sqlite3
 import sys
@@ -34,58 +12,25 @@ from pathlib import Path
 
 from loguru import logger
 
-from collector import run_collection, month_chunks
-from flatten import export_ndjson
-import errmon
-import notify
-import reports
+import read_account_csv
+from read_account_csv import month_chunks
+from tweet_collection import run_collection
+from export_dataset import export_ndjson
+import collection_errors
+import notifications
+import collection_summary
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "dataset"
-LEADERS = ROOT / "frame" / "leaders.csv"
-PARTIES = ROOT / "frame" / "parties.csv"
-FLOOR = date(2017, 3, 23)      # 2017 Tweede Kamer installation: the study window starts here
-CEILING = date(2025, 11, 12)   # 2025 Tweede Kamer election: the study window ends here
-
-
-def parse_end(s: str) -> date:
-    """Parse a frame end date and cap it at the study ceiling."""
-    s = s.strip().lower()
-    end = date.today() if s == "ongoing" else datetime.strptime(s, "%Y-%m-%d").date()
-    return min(end, CEILING)
-
-
-def read_csv(path: Path) -> list[dict]:
-    with path.open() as f:
-        return list(csv.DictReader(f))
+FRAME = ROOT / "frame" / "accounts.csv"
 
 
 def build_jobs() -> list[dict]:
-    """One dict per scrape target: handle, party, since, until (inclusive), kind."""
-    jobs = []
-    for r in read_csv(LEADERS):
-        start = datetime.strptime(r["leader_start"], "%Y-%m-%d").date()
-        since = max(start, FLOOR)
-        until = parse_end(r["leader_end"])
-        if since > until:
-            continue
-        jobs.append({"handle": r["handle"].lstrip("@").strip(), "party": r["party"],
-                     "since": since, "until": until, "kind": "leader"})
-    for r in read_csv(PARTIES):
-        start = datetime.strptime(r["seat_start"], "%Y-%m-%d").date().replace(day=1)
-        since = max(start, FLOOR)
-        until = parse_end(r["seat_end"])
-        if since > until:
-            continue
-        jobs.append({"handle": r["handle"].lstrip("@").strip(), "party": r["party"],
-                     "since": since, "until": until, "kind": "party"})
-    return jobs
+    return read_account_csv.build_jobs(FRAME)
 
 
 def job_paths(job: dict) -> tuple[Path, Path]:
-    d = OUT / job["party"]
-    d.mkdir(parents=True, exist_ok=True)
-    return d / f"{job['handle']}.sqlite", d / f"{job['handle']}.ndjson"
+    return read_account_csv.job_paths(job, OUT)
 
 
 def expected_months(since: date, until: date) -> set[str]:
@@ -114,6 +59,7 @@ def is_complete(db: Path, handle: str, since: date, until: date) -> bool:
 async def run_one(job: dict) -> int:
     """Collect one target and export its working store to NDJSON."""
     db, nd_path = job_paths(job)
+    db.parent.mkdir(parents=True, exist_ok=True)
     handle = job["handle"]
     tag = f"{job['party']}/{handle}"
     if is_complete(db, handle, job["since"], job["until"]):
@@ -121,7 +67,7 @@ async def run_one(job: dict) -> int:
         n = export_ndjson(db, nd_path)
         print(f"-> {nd_path.relative_to(ROOT)} ({n} tweets)")
         return n
-    print(f"\nScraping {tag}   window {job['since']} -> {job['until']} (tenure, clipped to {FLOOR}..{CEILING})\n")
+    print(f"\nScraping {tag}   window {job['since']} -> {job['until']} (from frame CSV)\n")
     frame = [{"handle": handle, "name": "", "party": job["party"], "country": "NL"}]
     until_excl = job["until"] + timedelta(days=1)  # include the end date itself
     await run_collection(frame, job["since"], until_excl, db,
@@ -132,11 +78,11 @@ async def run_one(job: dict) -> int:
 
 
 def print_menu(jobs: list[dict]) -> None:
-    print(f"\nWhich leader do you want to tackle?  (floor {FLOOR}, tenure-only)\n")
+    print("\nWhich target do you want to tackle?\n")
     for i, j in enumerate(jobs, 1):
         db, _ = job_paths(j)
         done = "✓" if is_complete(db, j["handle"], j["since"], j["until"]) else " "
-        kind = "" if j["kind"] == "leader" else "  [party acct]"
+        kind = "  [party acct]" if j["kind"] == "party" else ""
         print(f"  [{done}] {i:2}. {j['party']:16} @{j['handle']:18} "
               f"{j['since']} -> {j['until']}{kind}")
 
@@ -159,7 +105,7 @@ class _Tee:
 
 def setup_logging() -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
-    log_path = OUT / f"scrape_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log_path = OUT / f"collection_{datetime.now():%Y%m%d_%H%M%S}.log"
     fh = open(log_path, "a", encoding="utf-8")
     sys.stdout = _Tee(sys.__stdout__, fh)
     logger.add(str(log_path), level="INFO", enqueue=True)
@@ -190,24 +136,12 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
                     daily_limit: int | None = None,
                     notify_each: bool = False,
                     error_report_min: float = 10.0) -> int:
-    """Non-interactive: scrape incomplete targets once, isolating failures.
-
-    Built for cron/systemd. `limit` caps targets processed this run; `daily_limit`
-    caps targets processed per calendar day across all runs (persisted in
-    data/dataset/.quota.json) so a timer firing N times still won't exceed it.
-    Sends ONE summary email per run (if any account was processed).
-    Returns exit code 0 if nothing failed, 1 if any target errored.
-
-    Every `error_report_min` minutes an `errmon.ErrorMonitor` posts a Teams card
-    if X's backend threw any errors in that window — those queries return zero
-    tweets without raising, so nothing else in this function would notice. Set to
-    0 to disable.
-    """
+    """Non-interactive: collect incomplete targets once, isolating failures."""
     done = skipped = partial = failed = 0
     records: list[dict] = []
     total = len(jobs)
     session_start = time.monotonic()
-    monitor = errmon.ErrorMonitor(window_minutes=error_report_min) if error_report_min else None
+    monitor = collection_errors.ErrorMonitor(window_minutes=error_report_min) if error_report_min else None
     if monitor:
         monitor.start()
     for i, job in enumerate(jobs, 1):
@@ -245,7 +179,7 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             rec["status"] = "failed"
             records.append(rec)
             if notify_each:
-                notify.send_teams(reports.build_account_card(rec, i, total, skipped + done))
+                notifications.send_teams(collection_summary.build_account_card(rec, i, total, skipped + done))
             continue
         rec["seconds"] = time.monotonic() - t0
         if is_complete(db, job["handle"], job["since"], job["until"]):
@@ -257,7 +191,7 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
             print(f"  ~ {tag} made progress but isn't fully covered yet — will resume next run")
         records.append(rec)
         if notify_each:
-            notify.send_teams(reports.build_account_card(rec, i, total, skipped + done))
+            notifications.send_teams(collection_summary.build_account_card(rec, i, total, skipped + done))
 
     session_secs = time.monotonic() - session_start
     if monitor:
@@ -268,12 +202,12 @@ async def run_batch(jobs: list[dict], limit: int | None = None,
     if monitor:
         print(f"[errors] {monitor.final_summary()}")
     if records:  # one summary notification per run, only when something was processed
-        card = reports.build_session_card(records, done, partial, failed,
+        card = collection_summary.build_session_card(records, done, partial, failed,
                                   skipped, total, _daily_count(), session_secs, monitor)
-        if not notify.send_teams(card):  # Teams first; email only as fallback
-            subject, text, html = reports.build_session_email(records, done, partial, failed,
+        if not notifications.send_teams(card):  # Teams first; email only as fallback
+            subject, text, html = collection_summary.build_session_email(records, done, partial, failed,
                                                        skipped, total, _daily_count(), session_secs)
-            notify.send_email(subject, text, html=html)
+            notifications.send_email(subject, text, html=html)
     return 1 if failed else 0
 
 
@@ -281,19 +215,19 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="just list the targets and exit")
     ap.add_argument("--all", action="store_true",
-                    help="scrape every incomplete target non-interactively (for cron/systemd)")
+                    help="collect every incomplete target non-interactively (for cron/systemd)")
     ap.add_argument("--limit", type=int, default=None, metavar="N",
-                    help="with --all: scrape at most N targets this run")
+                    help="with --all: collect at most N targets this run")
     ap.add_argument("--daily-limit", type=int, default=None, metavar="M",
-                    help="with --all: scrape at most M targets per calendar day (across runs)")
+                    help="with --all: collect at most M targets per calendar day (across runs)")
     ap.add_argument("--notify-each", action="store_true",
                     help="with --all: post a Teams card after every account, not just "
                          "the end-of-session summary")
     ap.add_argument("--only", metavar="HANDLES",
-                    help="restrict the run to these comma-separated handles, scraped in "
+                    help="restrict the run to these comma-separated handles, collected in "
                          "the order given (cheapest first keeps the account pool's burst "
                          "capacity for the expensive targets). Unknown handles abort the "
-                         "run rather than silently scraping nothing.")
+                         "run rather than silently collection nothing.")
     ap.add_argument("--error-report-min", type=float, default=10.0, metavar="MIN",
                     help="with --all: post a Teams card every MIN minutes if X's backend "
                          "threw errors in that window (default 10; 0 disables). Those "

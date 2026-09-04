@@ -1,299 +1,138 @@
-# Populism Tweet Scraper
+# Tweet collection
 
-A reproducible pipeline for collecting tweets from Dutch political leaders and
-party accounts for academic research at Utrecht University.
+This project collects tweets from Dutch political parties and their leaders,
+keeps the dates needed for the study, and prepares the data for analysis in 4CAT.
+It also compares the dataset with the professors' earlier exports, so researchers
+can see which tweets are shared and which are missing.
 
-The project takes a list of accounts and relevant date periods, collects the
-available tweets, saves its progress, checks the results against an independent
-collection, and prepares the finished datasets for 4CAT.
+The original collection, repairs, and 4CAT imports finished by August 2026.
+The commands remain available for future work. Running `collection.py` without a
+command only shows help.
 
-It uses [twscrape](https://github.com/vladkens/twscrape) with browser session
-cookies, so it does not require access to the official X API.
+## Start here
 
-> **Project status:** the main dataset was collected and validated in July
-> 2026. The code remains available so the collection can be understood,
-> checked, repaired, or repeated.
->
-> **Data notice:** tweets are personal data. The working dataset and account
-> credentials are git-ignored and must be handled according to the project's
-> Data Management Plan.
-
-## What problem does it solve?
-
-Collecting historical X data through a browser is slow and difficult to repeat.
-Repeated searches can also produce different results. This project automates
-the process while keeping a record of:
-
-- which accounts and dates belong in the study;
-- which collection steps have finished;
-- where each tweet was found;
-- which tweets were missing from an independent reference collection;
-- which files were uploaded to 4CAT.
-
-The scraper cannot guarantee a complete archive. X search sometimes omits older
-replies and ordinary tweets, timeline endpoints are limited to roughly 3,200
-items, and deleted or inaccessible tweets cannot be recovered. The validation
-and repair tools make these limitations visible instead of treating every
-successful request as a complete result.
-
-## The workflow
-
-```text
-frame/leaders.csv + frame/parties.csv
-          who should be collected, and when
-                       │
-                       ▼
-          src/collect_dataset.py
-          builds and schedules collection jobs
-                       │
-                       ▼
-               src/collector.py
-        collects tweets in three complementary ways
-                       │
-                       ▼
-       data/dataset/<Party>/<handle>.sqlite
-          raw working store + progress checkpoint
-                       │
-                       ▼
-                src/flatten.py
-              exports raw NDJSON files
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-           analysis/     src/fetch_missing.py
-        checks recall     repairs known gaps by ID
-              │                 │
-              └────────┬────────┘
-                       ▼
-              src/upload_4cat.py
-       filters, converts, and uploads to 4CAT
-```
-
-## How tweets are collected
-
-For each account, the collection engine uses up to three passes:
-
-1. **Recent timeline** — reads the account's ordinary “Tweets” timeline. X
-   limits this to approximately 3,200 items.
-2. **Historical search** — searches `from:handle` month by month across the
-   relevant period. Monthly queries avoid the result ceiling of one large
-   search.
-3. **Tweets and replies** — reads the account's “Tweets & replies” timeline to
-   recover replies that X search may omit.
-
-The passes overlap deliberately. Each tweet ID is unique in the database, so
-finding the same tweet twice does not create a duplicate.
-
-The replies timeline can contain parent tweets written by other users. The
-collector checks the numerical author ID before accepting a timeline result.
-New timeline results are also checked against the target's date window.
-
-### Why three passes are still not always enough
-
-- X search can silently omit accessible tweets.
-- A query that reaches its result limit is silently truncated.
-- The recent and replies timelines only expose approximately 3,200 items.
-- Some backend errors return an empty result instead of raising an exception.
-- Very active or reply-heavy accounts can therefore have larger historical
-  gaps than quieter accounts.
-
-`src/errmon.py` watches for silent backend failures.
-`src/fetch_missing.py` can use known missing tweet IDs from a reference
-collection and request them individually when they are still available.
-
-## Inputs: the sampling frame
-
-The two committed CSV files under `frame/` define the dataset:
-
-- `leaders.csv` contains political leaders and their leadership periods.
-- `parties.csv` contains official party accounts and periods in which the party
-  held seats in the Tweede Kamer.
-
-The main study window is **2017-03-23 through 2025-11-12**. Leadership and
-seat-holding periods are clipped to that window.
-
-One target is one handle under one party and date window. If the same person
-appears under two parties, each period receives its own dataset file.
-
-See [`frame/README.md`](frame/README.md) for the CSV columns and date rules.
-
-## Outputs: SQLite, NDJSON, and 4CAT
-
-The three formats serve different purposes.
-
-### SQLite: working and provenance store
-
-```text
-data/dataset/<Party>/<handle>.sqlite
-```
-
-The SQLite database contains the raw tweet JSON, collection source, and
-checkpoint information. Tweet IDs are primary keys and writes use
-`INSERT OR IGNORE`, making repeated runs safe.
-
-The checkpoint records:
-
-- whether the recent-timeline pass finished;
-- which calendar months were searched;
-- whether the replies pass finished;
-- the last status or error.
-
-Existing databases may contain timeline records outside a target's final study
-window. They are retained as a broad working archive.
-
-### NDJSON: portable raw export
-
-```text
-data/dataset/<Party>/<handle>.ndjson
-```
-
-Each line contains one raw X GraphQL tweet object. The file is regenerated from
-SQLite and is convenient for streaming, comparison, and transfer.
-
-### 4CAT: filtered analysis dataset
-
-`src/upload_4cat.py` applies the authoritative leadership or parliamentary
-windows before upload. It then wraps each tweet in the format expected by
-4CAT's Zeeschuimer importer and creates a labelled dataset such as:
-
-```text
-@Robjetten (D66)
-```
-
-The SQLite database is the collection record; the 4CAT version is the
-date-filtered analysis dataset.
-
-## Quick start
-
-Requirements:
-
-- Python 3.10 or newer;
-- one or more X accounts with valid `auth_token` and `ct0` browser cookies.
-
-Set up the project:
+From this project folder, run:
 
 ```bash
-./setup.sh
-source .venv/bin/activate
-python src/add_accounts.py
+.venv/bin/python collection.py
 ```
 
-`add_accounts.py` saves cookies in the git-ignored `secrets/accounts.json` and
-can load and verify them immediately. To repeat only the loading step:
+Add a command and `--help` to see its options, for example:
 
 ```bash
-python src/load_accounts.py
+.venv/bin/python collection.py combine --help
 ```
 
-Preview every target without contacting X:
+On a new machine, `bash setup.sh` creates the Python environment, installs the
+requirements, and offers to set up X login accounts. These logins provide access
+to X; they are separate from the accounts whose tweets the study collects.
+Keep login cookies and service credentials private.
+
+## How the data moves
+
+1. **Choose accounts and dates.** `frame/accounts.csv` lists both parties and
+   leaders. Each row needs `handle`, `party`, `start`, and `end`. Dates use
+   `YYYY-MM-DD` and include both the first and last day. `name`, `kind`, and
+   `notes` describe the entry. Separate periods use separate rows.
+2. **Collect tweets.** The code reads the timeline, searches overlapping calendar
+   months, and reads replies. It stores only tweets by the requested account
+   within the row's dates. The study covers 2017-03-23 through 2025-11-12.
+3. **Store and export.** Each party/account has a SQLite database, which stores
+   tweets and collection progress. An NDJSON file contains one tweet per line
+   for later processing. A CSV export gives a table suitable for spreadsheet use.
+4. **Combine or compare.** Combining applies the CSV dates, orders tweets by date,
+   and removes duplicate tweet IDs. Comparison measures overlap with reference
+   exports and separates missing tweets by the target account from other authors.
+5. **Upload when needed.** 4CAT accepts either separate account datasets or a
+   combined dataset split into parts. Repeating a separate-account upload creates
+   another import; it does not update the existing one.
+
+The database avoids duplicate tweet IDs when collection steps overlap. Search
+results can be incomplete even when a step finishes, so saved progress alone
+does not establish that every tweet was collected.
+
+## Commands and scripts
+
+Use `.venv/bin/python collection.py COMMAND` for the commands below. Individual
+Python scripts can also be run directly.
+
+| Command | Script | Why use it? |
+|---|---|---|
+| `collect` | `src/collect_dataset.py` | Collect the accounts and dates in the CSV. `--dry-run` lists them without collecting. |
+| `account` | `src/collect_account.py` | Choose one account and dates through terminal questions. |
+| `add-logins` | `src/add_logins.py` | Add the X logins used for collection. |
+| `load-logins` | `src/load_logins.py` | Load and check those logins. |
+| `export` | `src/export_dataset.py` | Turn a database into CSV; specify `--db` and `--out`. |
+| `combine` | `analysis/combine_datasets.py` | Prepare one dataset without duplicate tweets. |
+| `upload` | `src/upload_4cat.py` | Send separate account datasets to 4CAT. |
+| `upload-combined` | `analysis/upload_combined_dataset.py` | Send a combined dataset to 4CAT in resumable parts. |
+| `compare` | `analysis/recall_data.py` | Compare the local dataset copy with reference exports. |
+| `report` | `analysis/comparison_report.py` | Turn comparison results into an HTML page. |
+| `collect-missing` | `src/collect_missing.py` | Try collecting specific missing tweet IDs from reference files. |
+
+`deploy/backup.sh` backs up server files to SURFdrive.
+`deploy/upload_yoda.sh` transfers dataset files to Yoda; its `--dry-run` option
+shows the proposed transfer without contacting Yoda. These use separate service
+configuration and are not part of the command menu.
+
+## Understanding the comparison
+
+The reference exports are in `~/Raw Data`. The comparison reads the local server
+copy in `data/dataset_server/` and uses the dates in `frame/accounts.csv`.
+“Recall” means the percentage of reference tweet IDs found in our dataset.
+`own_recall` excludes missing tweets attributed to another author. Reference
+exports can include parent tweets and quoted tweets by other people.
+
+Add `--other-authors` to include a broader count of other authors in the reference
+files, across all their dates. This answers a different question from overlap
+within the study dates, but now runs through the same comparison command.
+You can save the results and make the HTML report with:
 
 ```bash
-python src/collect_dataset.py --dry-run
+.venv/bin/python collection.py compare --other-authors --output analysis/dataset_recall.json
+.venv/bin/python collection.py report
 ```
 
-Choose one target interactively:
+Use `--reference`, `--dataset`, and `--accounts` to choose different comparison
+inputs. The report accepts `--input` for a different saved JSON file.
+
+CSV fields also answer different questions: `reply_count` records how many
+replies a tweet received, while `is_reply` says whether the tweet itself is a
+reply. `retweet_count` and `is_retweet` follow the same distinction. Counts reflect
+what X returned at collection time.
+
+## Files used behind the scenes
+
+You do not need to run every Python file. `src/tweet_collection.py` handles
+requests and storage; `src/read_account_csv.py` reads the account list;
+`src/client_4cat.py` handles 4CAT connections and tweet formatting.
+`src/cli_prompts.py` shares terminal questions. `src/collection_errors.py`,
+`src/notifications.py`, and `src/collection_summary.py` handle errors and optional
+progress messages. `analysis/read_tweets.py` shares the code for reading tweet
+files, authors, and dates.
+
+## Where the data lives
+
+The authoritative dataset is on the home server at
+`/opt/populism-scraping/data/dataset/`. The Mac's `data/dataset_server/` is a copy
+for analysis. `data/dataset/` on the Mac is test space, not the finished dataset.
+Exports read all rows in a database; older databases may include dates outside
+the current CSV. Combining and 4CAT upload apply the CSV date limits again.
+
+Generated comparison files, temporary work, datasets, and private application
+documents stay on this machine. Git tracks the code, account list, and guide.
+
+The server's collection and backup timers were disabled when checked on
+2026-08-30. Updating local code does not update that server or restart collection.
+
+## Check code changes
+
+Run the offline tests from this folder:
 
 ```bash
-python src/collect_dataset.py
+.venv/bin/python -m unittest discover -s tests
 ```
 
-Run specific accounts:
-
-```bash
-python src/collect_dataset.py --all --only Robjetten,Nvanvroonhoven,VVD
-```
-
-Run every incomplete target:
-
-```bash
-python src/collect_dataset.py --all
-```
-
-For unattended operation, limits can be applied per run and per day:
-
-```bash
-python src/collect_dataset.py --all --limit 3 --daily-limit 15
-```
-
-Interrupted runs are safe to restart. Completed months and passes are skipped.
-
-## Validation and repair
-
-The dataset was compared with an independent Zeeschuimer collection using
-tweet IDs inside the same date windows:
-
-```text
-recall = shared in-window tweet IDs / reference in-window tweet IDs
-```
-
-The comparison also identifies parent and quoted tweets written by other
-accounts, which should not be counted as missing tweets from the target.
-
-- `analysis/recall_data.py` calculates the comparison.
-- `analysis/render_report.py` creates a self-contained HTML report.
-- `analysis/foreign_census.py` measures other-author tweets in the reference
-  files.
-- `src/fetch_missing.py` fetches known missing IDs individually and records IDs
-  that are no longer available.
-
-These scripts are kept separate from the collection engine so the validation
-does not simply repeat the scraper's assumptions.
-
-## Running unattended
-
-The project includes systemd services and timers for a headless server:
-
-- bounded batch collection;
-- checkpointed restarts;
-- session logs;
-- Teams notifications with email fallback;
-- nightly SURFdrive backup with archived previous versions;
-- automatic preparation and upload to 4CAT.
-
-The production scraping timer is currently inactive because the main collection
-has finished. The backup workflow remains useful.
-
-See [`deploy/README.md`](deploy/README.md) for the server setup and operating
-commands.
-
-## Which script should I use?
-
-| Script | Use it for |
-|---|---|
-| `src/collect_dataset.py` | Main entry point for the research dataset. |
-| `src/collector.py` | Reusable three-pass collection engine; also has a lower-level CLI. |
-| `src/flatten.py` | Export SQLite to raw NDJSON or a tidy CSV. |
-| `src/upload_4cat.py` | Filter and upload completed datasets to 4CAT. |
-| `src/fetch_missing.py` | Repair known gaps by requesting tweet IDs directly. |
-| `src/add_accounts.py` | Add browser-cookie accounts interactively. |
-| `src/load_accounts.py` | Load and verify the twscrape account pool. |
-| `src/scrape_account.py` | Ad-hoc interactive scrape outside the study frame. |
-| `src/errmon.py` | Detect otherwise silent X backend errors. |
-| `src/reports.py` | Build Teams and email run summaries. |
-| `src/notify.py` | Send Teams messages and fallback email. |
-| `src/parse_archive_pdf.py` | Separate experiment for the Rutte PDF archive. |
-
-For a script-by-script explanation of the Python code, read
-[`docs/GUIDE.md`](docs/GUIDE.md).
-
-## Repository layout
-
-```text
-frame/       sampling-frame CSV files
-src/         collection, export, repair, and upload code
-analysis/    independent validation and report generation
-deploy/      headless-server services, timers, and backup script
-docs/        detailed code walkthrough
-secrets/     git-ignored credentials and configuration
-data/        git-ignored databases, exports, and logs
-```
-
-## Security and data handling
-
-- Never commit X cookies, SMTP passwords, Teams webhooks, or 4CAT tokens.
-- Everything under `secrets/` is ignored except example templates.
-- The collected dataset under `data/` is git-ignored.
-- Several authenticated X accounts improve redundancy and throughput but do
-  not remove X's collection limits.
-- Review the project's Data Management Plan before sharing or retaining tweet
-  data.
+These check local behavior. They do not prove that live X requests, server
+backups, or 4CAT uploads work. `AGENTS.md` gives coding assistants the operating
+rules for this project.

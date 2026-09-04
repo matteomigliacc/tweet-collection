@@ -1,19 +1,4 @@
-"""Three-pass tweet collection engine.
-
-For each handle:
-  Pass A (recent):  user_tweets  -> most recent timeline (X caps this ~3200)
-  Pass B (window):  search "from:handle since:.. until:.."  chunked per-month,
-                    which bypasses the 3200 ceiling for a bounded date range.
-  Pass C (replies): user_tweets_and_replies -> the profile's "Replies" tab
-                    (~3200 cap), filtered to the target author and date window.
-
-X search silently omits some replies and ordinary tweets, so the passes overlap.
-Tweet IDs are primary keys and checkpoints make reruns safe.
-
-Usage:
-  python src/collector.py --since 2026-01-01 --until 2026-07-01
-  python src/collector.py --csv frame/politicians.csv --recent-limit 3200
-"""
+"""Three-pass tweet collection with exact author and half-open date filtering."""
 import argparse
 import asyncio
 import json
@@ -22,7 +7,7 @@ import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from twscrape import API
+from read_account_csv import month_chunks
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CSV = ROOT / "frame" / "politicians.csv"
@@ -65,42 +50,31 @@ def init_db(con: sqlite3.Connection) -> None:
     con.commit()
 
 
-def month_chunks(since: date, until: date):
-    """Yield calendar-month chunks covering the half-open interval."""
-    cur = date(since.year, since.month, 1)
-    while cur < until:
-        # first day of the next month (December rolls over to January 1st)
-        nxt = date(cur.year + 1, 1, 1) if cur.month == 12 else date(cur.year, cur.month + 1, 1)
-        yield max(cur, since), min(nxt, until)
-        cur = nxt
 
 
-# One search query returns at most SEARCH_LIMIT tweets. A month that hits the
-# ceiling is silently truncated — X returns the newest N and stops, with no error
-# and nothing in the response to say results were dropped. @cdavandaag tweeted
-# 5,572 times in March 2017 (the general election) and came back with exactly
-# 1,000 under the old limit; @lientje1967's March 2021 lost 280 the same way.
-# Re-scraping cannot fix it: every run returns the same first N. Hence a ceiling
-# far above any real month.
+# Search is capped per month; keep the limit above the busiest month.
 SEARCH_LIMIT = 20000
 
 
-async def search_window(api, con, handle, uid, start: date, end: date,
+async def search_window(api, con, handle, uid, query_start: date, query_end: date,
+                        keep_since: date, keep_until: date,
                         raw: bool) -> tuple[int, int]:
-    """Run one `from:handle since:.. until:..` query over [start, end).
-
-    Returns (newly stored, raw tweets seen).
-    """
-    q = f"from:{handle} since:{start.isoformat()} until:{end.isoformat()}"
+    """Search one full month and store only rows inside [keep_since, keep_until)."""
+    q = (f"from:{handle} since:{query_start.isoformat()} "
+         f"until:{query_end.isoformat()}")
     new = seen = 0
     if raw:
         async for rep in api.search_raw(q, limit=SEARCH_LIMIT):
             for obj in extract_raw_tweets(rep):
                 seen += 1
+                if not raw_tweet_is_eligible(obj, uid, keep_since, keep_until):
+                    continue
                 new += store_raw(con, obj, handle, "search")
     else:
         async for tw in api.search(q, limit=SEARCH_LIMIT):
             seen += 1
+            if tw.user.id != uid or not (keep_since <= tw.date.date() < keep_until):
+                continue
             new += store(con, tw, handle, uid, "search")
     return new, seen
 
@@ -148,13 +122,7 @@ def store(con, tweet, handle, user_id, source) -> int:
 
 
 def _unwrap_result(res):
-    """Return the raw GraphQL Tweet object (with legacy/rest_id), or None.
-
-    X wraps some tweets one level deeper: a "TweetWithVisibilityResults" (e.g.
-    limited-visibility tweets) holds the real tweet under its "tweet" key.
-    Anything that doesn't end up looking like a tweet (no rest_id/legacy —
-    deleted tweets, ads, "who to follow" modules) is rejected with None.
-    """
+    """Return the raw GraphQL Tweet object (with legacy/rest_id), or None."""
     if not isinstance(res, dict):
         return None
     if res.get("__typename") == "TweetWithVisibilityResults":
@@ -165,11 +133,7 @@ def _unwrap_result(res):
 
 
 def extract_raw_tweets(rep) -> list[dict]:
-    """Pull the top-level raw Tweet objects out of a raw GraphQL response.
-
-    Timeline endpoints place entries at different depths. Nested quoted and
-    retweeted objects remain inside their parent rather than becoming rows.
-    """
+    """Pull the top-level raw Tweet objects out of a raw GraphQL response."""
     out = []
 
     def from_entry(entry):
@@ -240,14 +204,7 @@ def read_frame(csv_path: Path) -> list[dict]:
 async def collect_handle(api, con, row, since, until, recent_limit,
                          skip_recent=False, skip_replies=False,
                          verbose=False, raw=False) -> None:
-    """Scrape one account: resolve the handle to a user id, then run the passes.
-
-    Order: Pass A (recent timeline, unless skip_recent), Pass B
-    (month-by-month search over [since, until)), Pass C (replies tab, unless
-    skip_replies). Each pass checks the checkpoint first, so on a re-run only
-    unfinished work happens. `raw=True` stores the untouched GraphQL objects
-    (the dataset format); raw=False stores twscrape's parsed form.
-    """
+    """Scrape one account: resolve the handle to a user id, then run the passes."""
     handle = row["handle"].lstrip("@").strip()
     cp = load_checkpoint(con, handle)
 
@@ -285,7 +242,7 @@ async def collect_handle(api, con, row, since, until, recent_limit,
                         replies_done=cp["replies_done"])
         print(f"  [A] @{handle}: +{n} recent tweets", flush=True)
 
-    # Pass B — bounded window, month by month
+    # Pass B — query full calendar months, store only the exact target window
     all_months = [s.strftime("%Y-%m") for s, _ in month_chunks(since, until)]
     for start, end in month_chunks(since, until):
         tag = start.strftime("%Y-%m")
@@ -296,7 +253,9 @@ async def collect_handle(api, con, row, since, until, recent_limit,
             print(f"  [B] @{handle} {tag} ({idx}/{len(all_months)}) "
                   f"[{datetime.now():%H:%M:%S}] querying ...", flush=True)
         t0 = time.perf_counter()
-        n, _ = await search_window(api, con, handle, uid, start, end, raw)
+        n, _ = await search_window(
+            api, con, handle, uid, start, end, since, until, raw
+        )
         con.commit()
         cp["months_done"].append(tag)
         save_checkpoint(con, handle, uid, cp["recent_done"], cp["months_done"], "ok",
@@ -338,11 +297,9 @@ async def collect_handle(api, con, row, since, until, recent_limit,
 async def run_collection(frame, since, until, db_path,
                          recent_limit=3200, skip_recent=False, skip_replies=False,
                          verbose=False, raw=False) -> int:
-    """Collect all handles in `frame` into `db_path`. Returns total tweets in the DB.
+    """Collect all handles in `frame` into `db_path`. Returns total tweets in the DB."""
+    from twscrape import API
 
-    Shared entry point for both the CLI (main) and the interactive front-end.
-    When raw=True, stores the raw GraphQL Tweet objects (ndjson-compatible).
-    """
     api = API(str(ACCOUNTS_DB))
     con = sqlite3.connect(str(db_path))
     init_db(con)

@@ -1,15 +1,7 @@
-"""Flatten collected raw tweet JSON (tweets.sqlite) into a tidy analysis table.
-
-Reads the raw_json column and emits one row per tweet with the fields most
-studies need. The raw store stays the source of truth; this is a derived view,
-so it never scrapes and can be re-run freely.
-
-Usage:
-  python src/flatten.py                 # -> data/tweets_flat.csv
-  python src/flatten.py --out foo.csv
-"""
+"""Export stored GraphQL or parsed tweets to NDJSON and CSV."""
 import argparse
 import csv
+from contextlib import closing
 import json
 import sqlite3
 from datetime import datetime
@@ -59,13 +51,7 @@ def _flatten_raw(handle: str, collection_pass: str, d: dict) -> dict:
 
 
 def flatten_row(handle: str, collection_pass: str, d: dict) -> dict:
-    """Flatten one stored tweet, whichever of the two storage formats it uses.
-
-    Dataset runs store the raw GraphQL object (recognisable by its 'legacy'
-    key); ad-hoc non-raw runs store twscrape's parsed form with different
-    field names (rawContent vs full_text, likeCount vs favorite_count, ...).
-    Both come out as the same tidy row.
-    """
+    """Flatten one stored tweet, whichever of the two storage formats it uses."""
     if "legacy" in d:  # raw GraphQL object (raw-mode / dataset format)
         return _flatten_raw(handle, collection_pass, d)
     users = d.get("mentionedUsers") or []
@@ -94,30 +80,27 @@ def flatten_row(handle: str, collection_pass: str, d: dict) -> dict:
 
 def export_ndjson(db_path: Path, out_path: Path) -> int:
     """Write every stored raw tweet object to NDJSON."""
-    con = sqlite3.connect(str(db_path))
-    rows = con.execute("SELECT raw_json FROM tweets ORDER BY created_at").fetchall()
-    n = 0
-    with Path(out_path).open("w", encoding="utf-8") as f:
-        for (raw,) in rows:
-            f.write(raw.rstrip("\n"))
-            f.write("\n")
-            n += 1
-    con.close()
+    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as con:
+        rows = con.execute("SELECT raw_json FROM tweets ORDER BY created_at")
+        n = 0
+        with Path(out_path).open("w", encoding="utf-8") as f:
+            for (raw,) in rows:
+                f.write(raw.rstrip("\n") + "\n")
+                n += 1
     return n
 
 
 def flatten_db(db_path: Path, out_path: Path) -> int:
-    """Flatten every tweet in `db_path` to a tidy CSV at `out_path`. Returns row count."""
-    con = sqlite3.connect(str(db_path))
-    rows = con.execute("SELECT handle, source, raw_json FROM tweets").fetchall()
-    n = 0
-    with Path(out_path).open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=COLUMNS)
-        w.writeheader()
-        for handle, source, raw in rows:
-            w.writerow(flatten_row(handle, source, json.loads(raw)))
-            n += 1
-    con.close()
+    """Export either stored tweet format to CSV."""
+    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as con:
+        rows = con.execute("SELECT handle, source, raw_json FROM tweets")
+        n = 0
+        with Path(out_path).open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=COLUMNS)
+            writer.writeheader()
+            for handle, source, raw in rows:
+                writer.writerow(flatten_row(handle, source, json.loads(raw)))
+                n += 1
     return n
 
 

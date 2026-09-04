@@ -1,18 +1,5 @@
 #!/usr/bin/env bash
-#
-# Nightly dataset backup to SURFdrive over WebDAV (rclone remote "surfdrive").
-#
-# Mirrors data/dataset/ to populism-backup/dataset/ on SURFdrive. Files that a
-# sync would overwrite or delete are moved into a dated archive/ folder first,
-# so no backup run can ever destroy the previous good copy.
-# Notifications (src/notify.py): success -> a quiet Teams card only;
-# failure -> a Teams card AND an email, so a broken backup is hard to miss.
-#
-# One-time setup (already done on the production LXC):
-#   apt-get install rclone
-#   rclone config create surfdrive webdav \
-#       url "https://surfdrive.surf.nl/remote.php/dav/files/<user>" \
-#       vendor owncloud user "<user>" pass "<webdav-app-password>"
+# Back up datasets to SURFdrive, retaining replaced files in a dated archive.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,14 +17,14 @@ if rclone sync data/dataset "$DEST/dataset" \
 import sys
 from datetime import datetime
 sys.path.insert(0, "src")
-import notify
+import notifications
 card = {"type": "AdaptiveCard", "version": "1.4",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "body": [{"type": "TextBlock", "weight": "Bolder",
                   "color": "Good", "text": "✅ SURFdrive backup OK"},
                  {"type": "TextBlock", "wrap": True, "isSubtle": True, "size": "Small",
                   "text": f"{sys.argv[1].strip()} · {datetime.now():%Y-%m-%d %H:%M}"}]}
-notify.send_teams(card)
+notifications.send_teams(card)
 PY
 else
   rc=$?
@@ -45,7 +32,7 @@ else
   .venv/bin/python - "$LOG" <<'PY'
 import sys
 sys.path.insert(0, "src")
-import notify
+import notifications
 tail = open(sys.argv[1], errors="replace").read()[-900:] or "(no rclone log)"
 card = {"type": "AdaptiveCard", "version": "1.4",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -53,8 +40,8 @@ card = {"type": "AdaptiveCard", "version": "1.4",
                   "color": "Attention", "text": "⚠️ SURFdrive backup FAILED"},
                  {"type": "TextBlock", "wrap": True, "isSubtle": True,
                   "fontType": "Monospace", "text": tail}]}
-notify.send_teams(card)   # failure goes to BOTH channels
-notify.send_email("[scraper] SURFdrive backup FAILED", tail)
+notifications.send_teams(card)   # failure goes to BOTH channels
+notifications.send_email("[collection] SURFdrive backup FAILED", tail)
 PY
   exit "$rc"
 fi

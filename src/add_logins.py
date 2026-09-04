@@ -1,14 +1,4 @@
-"""Interactively add X accounts (by cookie string) to secrets/accounts.json.
-
-Prompts for a username and a cookie string per account, validates that the
-cookie string carries the two tokens twscrape needs (auth_token + ct0), and
-writes/updates secrets/accounts.json — no hand-editing of JSON required.
-
-    python src/add_accounts.py
-
-At the end it offers to load and verify the pool (same as load_accounts.py).
-The file is git-ignored, so real cookies never leave this machine.
-"""
+"""Add cookie-authenticated X accounts to secrets/accounts.json."""
 import asyncio
 import json
 from pathlib import Path
@@ -26,7 +16,7 @@ def missing_tokens(cookie_str: str) -> list[str]:
     return [name for name in REQUIRED_COOKIES if f"{name}=" not in cookie_str]
 
 
-def load_accounts() -> list[dict]:
+def load_logins() -> list[dict]:
     if not SECRETS.exists():
         return []
     try:
@@ -58,7 +48,7 @@ async def main() -> None:
     print("  Add X accounts by cookie string  (Ctrl-C to quit)")
     print("=" * 60)
 
-    accounts = load_accounts()
+    accounts = load_logins()
     if accounts:
         names = ", ".join(a.get("username", "?") for a in accounts)
         print(f"\nAlready in {SECRETS.name}: {len(accounts)} account(s) — {names}")
@@ -71,7 +61,7 @@ async def main() -> None:
 
     added = 0
     while True:
-        username = ask("\nUsername (without @), or blank to finish").lstrip("@").strip()
+        username = ask("\nUsername (without @), or blank to finish", default="").lstrip("@").strip()
         if not username:
             break
 
@@ -98,10 +88,10 @@ async def main() -> None:
     print(f"\nSaved {len(accounts)} account(s) to {SECRETS.relative_to(ROOT)}")
 
     if ask_yes_no("\nLoad and verify these accounts now?", default=True):
-        import load_accounts as loader
+        import load_logins as loader
         await loader.main()
     else:
-        print("Later, run:  python src/load_accounts.py")
+        print("Later, run:  python src/load_logins.py")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,4 @@
+# Optional dependencies for deploy/upload_yoda.sh.
+# Kept separate so the collection runtime does not depend on the transfer client.
+ibridges>=2.0,<3
+ibridges-servers-uu>=0.3,<1
